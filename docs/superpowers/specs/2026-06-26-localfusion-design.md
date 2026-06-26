@@ -101,7 +101,8 @@ reasoning、内置工具 web_search/image_generation、多模态 item），Chat 
 - 首次启动（空库）引导：
   1. 检测到空库 → 自动建表（迁移）。
   2. 生成随机 `enc_salt` 写入 settings。
-  3. 生成一个随机 **admin token**，**打印到控制台一次**（只此一次，存哈希），用户拿它
+  3. 生成一个随机 **admin token**，**经一次性 `println!` 直接写控制台**（只此一次，
+     仅存哈希；**不经 tracing/日志系统**，避免落入日志文件，见 §5.3 / §9），用户拿它
      登录管理界面配置其余一切。
   4. 写入默认监听地址：推理入口 `127.0.0.1:8787`、管理端口 `127.0.0.1:8788`。
   5. 日志默认 level=info、输出 stdout、不写文件。
@@ -155,13 +156,26 @@ CREATE TABLE ingress_keys (
   key_hash   TEXT NOT NULL UNIQUE,   -- SHA-256
   label      TEXT,
   enabled    INTEGER NOT NULL DEFAULT 1,
+  acl_all    INTEGER NOT NULL DEFAULT 0,  -- 1 = 允许全部虚拟模型 (wildcard, 取代 '*')
   created_at INTEGER NOT NULL
 );
+-- 具体白名单: 外键引用 virtual_models, 删除虚拟模型时级联清除对应 ACL 行,
+-- 避免「删除后重建同名虚拟模型意外继承旧权限」。wildcard 不在此表 (用 acl_all)。
 CREATE TABLE ingress_key_acl (
   key_id       INTEGER NOT NULL REFERENCES ingress_keys(id) ON DELETE CASCADE,
-  virtual_name TEXT NOT NULL,        -- '*' = 全部
+  virtual_name TEXT NOT NULL REFERENCES virtual_models(name) ON DELETE CASCADE,
   PRIMARY KEY (key_id, virtual_name)
 );
+```
+
+> **ACL 语义**：鉴权时——`acl_all=1` 放行任意虚拟模型；否则要求请求的 virtual_name
+> 出现在该 key 的 `ingress_key_acl` 行中。删除虚拟模型经外键级联自动清除其残留 ACL
+> 行（重建同名虚拟模型不会继承旧授权，需重新授予）。前端「允许全部」开关写 `acl_all`，
+> 「指定白名单」写具体行。**外键级联依赖连接初始化执行 `PRAGMA foreign_keys=ON`
+> （见 §4 末「DB 层约束」）。**
+
+```sql
+-- (schema 续)
 
 -- 价格 (第三方程序写入, localfusion 只读)
 CREATE TABLE prices (
@@ -227,6 +241,11 @@ CREATE INDEX idx_usage_hour ON usage_hourly(hour_ts);
   选最低；缺价格者记 warning 排到最后。
 - **价格/延迟解耦**：prices 由第三方写、localfusion 只读；latency 由 localfusion 自己
   写（真实请求 + 探测）。价格抓取程序 v1 不开发，测试用 seed 数据填充。
+- **DB 层约束（外键必须显式开启）**：SQLite 默认 **不强制外键**。DB 层必须在**每个
+  连接建立时**执行 `PRAGMA foreign_keys = ON`（连接池则配 `after_connect` 钩子对每条
+  连接执行），否则 `ON DELETE CASCADE`（virtual_model_members、ingress_key_acl）与
+  引用完整性（models 被引用检查）都不会生效。同时建议 `PRAGMA journal_mode = WAL`
+  与 `PRAGMA busy_timeout` 以适配并发读写。迁移与该 PRAGMA 在启动建连时统一应用。
 
 ---
 
@@ -248,7 +267,8 @@ CREATE INDEX idx_usage_hour ON usage_hourly(hour_ts);
 ### 5.2 入口与管理鉴权
 
 - **ingress key**：存 SHA-256 哈希。客户端请求须带其一（`Authorization`/`x-api-key`），
-  校验哈希；并检查该 key 的 ACL 白名单是否允许其请求的虚拟模型（`*`=全部）。
+  校验哈希；并检查 ACL（`acl_all=1` 放行任意虚拟模型，否则要求请求的 virtual_name 在
+  该 key 的 `ingress_key_acl` 白名单中，见 §4 ACL 语义）。
   空 key 表（首启）时由界面尽快配置；ingress_keys 表为空可配置为拒绝所有推理请求。
 - **admin token**：存哈希。管理 API 校验 `Authorization: Bearer <admin-token>`。
 - 推理入口默认仅监听 127.0.0.1；管理服务独立端口，admin token 鉴权。
@@ -324,6 +344,53 @@ pub struct UnifiedResponse {
 > multimodal 产出主模型多轮 + 各工具回合，role 分别标 Member/Tool。失败的成员调用
 > 也记一条 `status=Failed`（cost/token 据实，多为 0），供 errors 维度统计。
 
+#### UnifiedStream 事件模型
+
+`UnifiedStream` 是协议无关的流式抽象：一个产出 `UnifiedStreamEvent` 的异步流
+（实现为 `tokio::sync::mpsc::Receiver<Result<UnifiedStreamEvent, ConnError>>` 包装，
+对齐 llm-switch `sse.rs` 的 channel 模式）。Connector 把供应商 SSE 翻译成它；入口层
+再把它翻译成目标协议的 SSE（Chat / Responses / Anthropic 各自的事件格式）。
+
+```rust
+pub struct UnifiedStream {
+    pub rx: tokio::sync::mpsc::Receiver<Result<UnifiedStreamEvent, ConnError>>,
+    pub upstream_request_id: Option<String>,
+}
+
+pub enum UnifiedStreamEvent {
+    /// 流已建立、上游返回 2xx 且收到首个有效事件。failover 用它界定
+    /// 「首事件边界」: 收到 Started 之前可故障转移, 之后不可 (§7.1)。
+    Started { model_id: String },
+    /// 文本增量。
+    TextDelta { text: String },
+    /// 推理增量 (Responses/Anthropic reasoning, 可选)。
+    ReasoningDelta { text: String },
+    /// 工具调用增量/完成 (multimodal 据此拦截; 含 id/name/args 累积)。
+    ToolCall { id: String, name: String, args: serde_json::Value },
+    /// 正常结束。携带本次调用的最终用量, 出口层据此写 usage_hourly (§8)。
+    Done { usage: ModelUsage, finish_reason: Option<String> },
+    /// 流中途错误 (已开始吐 token 后上游中断等)。
+    Error { message: String },
+}
+```
+
+事件契约：
+
+- **顺序**：`Started` 必为首事件；随后任意多个 `*Delta` / `ToolCall`；以恰好一个
+  `Done` **或** `Error` 终止流，终止后 channel 关闭。
+- **usage 传递**：仅 `Done` 携带 `ModelUsage`（从供应商 SSE 的 usage 事件解析；若上游
+  不给 usage，则按已累计产出 token 估算并标注 `estimated`）。出口层在转发流给客户端
+  的同时缓存这条 usage，流关闭后写入 usage_hourly。`Error` 终止时也补记一条
+  `status=Failed` 的用量（token/cost 据实，多为 0）。
+- **错误语义**：建连/状态码失败发生在产出流**之前**，直接返回 `Err(ConnError)`（不进
+  流）；`Error` 事件专指「已 `Started` 之后」的中途失败。failover 因此只能在收到
+  `Started` 前切换（§7.1）。
+- **speed 度量**：`Done.usage` 含 output_tokens；出口层结合从 `Started` 到 `Done` 的
+  耗时算出 throughput，写 latency_samples（§7.2）。
+- **伪流**：panel 类策略返回 `Full`，出口层把 `UnifiedResponse` 切成一串
+  `UnifiedStreamEvent`（`Started` → 若干 `TextDelta` → `Done`）再按目标协议 SSE 输出，
+  与真流共用同一套「Unified 事件 → 协议 SSE」翻译器。
+
 ### 6.2 Connector trait（出口适配器）
 
 参考 llm-switch 的 chat/anthropic 转换逻辑**用标准类型重写**，不引入 codex 依赖
@@ -386,10 +453,28 @@ pub trait Strategy: Send + Sync {
 
 pub struct StrategyCtx<'a> {
     pub req: UnifiedRequest,
-    pub members: Vec<MemberHandle<'a>>,  // 每个含 Connector + EgressCtx
+    pub members: Vec<MemberHandle<'a>>,  // 有序的成员句柄, 每个含 Connector + EgressCtx
+    /// 模型解析器: 把任意真实模型 id 解析成可调用句柄。
+    /// 供 judge / multimodal 能力路由使用——它们引用的 model id 不一定在 members 里。
+    pub resolver: &'a ModelResolver<'a>,
     pub params: serde_json::Value,       // 该虚拟模型的策略私有参数
     pub db: &'a Db,                      // speed/cheapest 查延迟/价格表
     pub want_stream: bool,
+}
+
+/// 由 Router 构造, 持有 models 表 + 解密能力 + 共享 http client + 连接器工厂。
+/// `resolve(id)` 查 models 表 → 解密 key → 组装 EgressCtx → 配 Connector, 返回句柄。
+/// 未知 id 返回 Err(FusionError::InvalidRequest)。
+pub struct ModelResolver<'a> { /* db, crypto, http, ... */ }
+impl<'a> ModelResolver<'a> {
+    pub fn resolve(&self, model_id: &str) -> Result<MemberHandle<'a>, FusionError>;
+}
+
+/// 成员/被解析模型句柄: 一个具体真实模型的可调用单元。
+pub struct MemberHandle<'a> {
+    pub model_id: String,
+    pub connector: &'a dyn Connector,
+    pub egress: EgressCtx,
 }
 
 pub enum StrategyOutput {
@@ -398,10 +483,18 @@ pub enum StrategyOutput {
 }
 ```
 
-> **流式下的用量统计**：`UnifiedStream` 在流结束时必须附带一条最终的
-> `ModelUsage`（从供应商 SSE 的 usage 事件解析，或按已产出 token 估算）。出口层在
-> 把流转发给客户端的同时收集这条用量，待流关闭后写入 usage_hourly（见 §8）。因此
-> 无论策略返回 `Stream` 还是 `Full`，统计口径一致。
+> **模型 id 解析（解决 judge / 工具路由的引用）**：`members` 只含虚拟模型显式配置的
+> 成员，而 `params.judge`（synthesize/best-of-n）与 multimodal 的能力路由表引用的
+> model id **不要求出现在 members 中**。策略通过 `ctx.resolver.resolve(id)` 把任意
+> `models` 表中的 id 解析成 `MemberHandle`（含 Connector + 解密后的 EgressCtx）。
+> 启动期与保存虚拟模型时校验：`judge` 与能力路由表里的每个 model id 必须存在于
+> `models` 表，否则拒绝（fail-fast，见 §3）。这样 judge 可以是一个不参与 panel 的
+> 独立模型，能力路由也能指向任意专用后端。
+
+> **流式下的用量统计**：`UnifiedStream` 的终止 `Done` 事件携带最终 `ModelUsage`
+> （定义见 §6.1「UnifiedStream 事件模型」）。出口层转发流给客户端的同时缓存这条用量，
+> 待流关闭后写入 usage_hourly（见 §8）。因此无论策略返回 `Stream` 还是 `Full`，统计
+> 口径一致。
 
 性质：
 
@@ -470,15 +563,23 @@ pub enum StrategyOutput {
 每次请求结束，出口层从 `UnifiedResponse.calls`（流式则从流结束时收集的 `ModelUsage`
 列表）读取用量明细，对当前整点 `hour_ts` 做原子 upsert，写三个维度：
 
-- `scope='real'`：遍历 `calls`，每条 `ModelUsage` 按其 `model_id` 累加一行
-  （panel 策略一次请求涉及多个成员 + judge，各自累加自己的 token/cost；失败调用累加
-  `errors`）。
-- `scope='virtual'`：该**虚拟模型名**累加一行，用 `UnifiedResponse.usage` 合计
-  （= 本次所有底层调用的总和）。
-- `scope='total'`：全局累加一行（name 留空），同样用合计。
+- `scope='real'`：遍历 `calls`，每条 `ModelUsage` 按其 `model_id` 累加一行——
+  累加该条的 token/cost；`requests` **按底层调用计数**（每条 calls +1）；失败调用
+  累加 `errors`。
+- `scope='virtual'`：该**虚拟模型名**累加一行，token/cost 用 `UnifiedResponse.usage`
+  合计；`requests` **按对外请求计数**（每个外部请求恰好 +1）；本次请求整体失败才
+  `errors` +1。
+- `scope='total'`：全局累加一行（name 留空），口径同 virtual（按对外请求计数）。
 
-口径自洽：real 是底层调用视角（逐条 calls），virtual/total 是对外请求视角（合计
-usage）。三者来自同一份 `calls`，real 各行之和 = virtual = total 的增量。
+**口径说明（重要）**：
+- **token / cost**：`real` 各行之和 == `virtual` == `total` 的增量（同一份 `calls`
+  的不同聚合视角，恒等）。
+- **requests**：口径**不同且不可比**——`real.requests` 是底层供应商调用次数（panel/
+  multimodal 一个对外请求会产生多次底层调用，故 `real.requests` 之和 ≥
+  `virtual.requests`）；`virtual.requests` / `total.requests` 是对外请求次数。前端
+  展示时分别标注「底层调用数」与「请求数」，不做跨 scope 的 requests 相等假设。
+- **errors**：`real.errors` 计失败的底层调用；`virtual/total.errors` 计整体失败的
+  对外请求。同样不跨 scope 相等。
 
 写入：
 ```sql
@@ -508,7 +609,9 @@ ON CONFLICT(hour_ts,scope,name) DO UPDATE SET
 - **动态生效**：用 `tracing_subscriber` 的 `reload::Handle` 持有可重载 filter，
   界面改 `log_level` 时热重载，无需重启。文件路径改动需重启（appender 启动时绑定），
   界面提示「修改日志文件需重启」。
-- 冷启动：空库用默认值（info / stdout / 无文件），首启日志正常打印（含 admin token）。
+- 冷启动：空库用默认值（info / stdout / 无文件）。**首启的 admin token 仅经一次性
+  `println!` 直接写控制台，绝不经过 tracing / file appender**（否则会落入日志文件，
+  违反 §5.3）。即便此刻日志已初始化，token 输出也走独立的直接 stdout 通道。
 - 安全：debug 档可记录请求/响应内容，但**绝不记录**任何密钥明文（见 §5.3）。
 
 ---
@@ -614,7 +717,8 @@ GET/POST/PUT/DELETE  /admin/api/virtual-models[/:name]
 GET                  /admin/api/strategies        # 策略列表 + params schema (驱动动态表单)
 # 密钥 / ACL
 GET/POST/DELETE      /admin/api/keys[/:id]         # 生成时仅一次返回明文
-PUT                  /admin/api/keys/:id/acl       # 设置虚拟模型白名单
+PATCH                /admin/api/keys/:id           # 改 enabled / label (不涉及 key 本身)
+PUT                  /admin/api/keys/:id/acl       # 设置虚拟模型白名单 (acl_all 或具体名单)
 # 监控
 GET  /admin/api/stats/latency?model=&window=       # 吞吐趋势
 GET  /admin/api/stats/prices
@@ -710,15 +814,16 @@ navGroups）：
 - 删除同 13.2.1 模式。
 
 #### 13.2.3 密钥/ACL 管理 `features/keys/` — 数据源 `GET /admin/api/keys`
-- `keys-table`：列——label、状态（enabled `Switch`，切换调 PUT）、创建时间
-  （date-fns 格式化）、ACL 摘要（`*` 或前 N 个虚拟模型名 + 「…」tooltip）、
-  `row-actions`（编辑 ACL / 删除）。绝不显示明文。
+- `keys-table`：列——label、状态（enabled `Switch`，切换调 `PATCH /admin/api/keys/:id`）、
+  创建时间（date-fns 格式化）、ACL 摘要（`acl_all=1` 显示「全部」/ 否则前 N 个虚拟模型名
+  + 「…」tooltip）、`row-actions`（编辑 ACL / 改 label / 删除）。绝不显示明文。
 - `keys-primary-buttons`：「新建 key」→ 输入 label 的小对话框 → `POST /admin/api/keys`
   → **结果对话框一次性展示明文 key**，「复制」按钮 + 红色提示「关闭后无法再次查看」，
   关闭后 invalidate 刷新。
-- `keys-acl-dialog`：RadioGroup 选「允许全部（`*`）」或「指定白名单」；选指定时
-  Checkbox 列表列出所有虚拟模型名（来自 virtual-models query）。保存 →
+- `keys-acl-dialog`：RadioGroup 选「允许全部（写 `acl_all=1`）」或「指定白名单」；选
+  指定时 Checkbox 列表列出所有虚拟模型名（来自 virtual-models query）。保存 →
   `PUT /admin/api/keys/:id/acl`。
+- 改 label / 切换 enabled → `PATCH /admin/api/keys/:id`。
 - 删除：`AlertDialog` → `DELETE /admin/api/keys/:id`。
 
 #### 13.2.4 监控面板 `features/dashboard/`（套用 shadcn-admin dashboard 范式）
