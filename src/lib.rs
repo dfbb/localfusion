@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod connector;
 pub mod crypto;
 pub mod db;
