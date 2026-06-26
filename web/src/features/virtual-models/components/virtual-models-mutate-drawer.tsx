@@ -73,10 +73,6 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
     }
   }, [open, currentRow])
 
-  // Reset params when strategy changes
-  useEffect(() => {
-    if (!isEdit) setParams({})
-  }, [strategy, isEdit])
 
   const save = useMutation({
     mutationFn: (v: { name: string; strategy: string; members: string[]; params: Record<string, unknown> }) =>
@@ -135,7 +131,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
               策略
             </LabelPrimitive.Root>
             <div className="col-span-4">
-              <Select value={strategy} onValueChange={setStrategy}>
+              <Select value={strategy} onValueChange={(v) => { setStrategy(v); if (!isEdit) setParams({}) }}>
                 <SelectTrigger className="w-full h-8">
                   <SelectValue placeholder="选择策略..." />
                 </SelectTrigger>
