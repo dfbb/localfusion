@@ -460,6 +460,12 @@ pub struct StrategyCtx<'a> {
     pub params: serde_json::Value,       // 该虚拟模型的策略私有参数
     pub db: &'a Db,                      // speed/cheapest 查延迟/价格表
     pub want_stream: bool,
+    /// 调用记录器: 每次非流式底层调用(成功/失败)都推一条 ModelUsage。
+    /// 编排层在策略返回后(Ok/Err 均) drain 写统计。见下文「调用记录器」。
+    pub recorder: &'a CallRecorder,
+    /// 调试 trace: 仅 playground 请求时为 Some(正常推理入口为 None)。
+    /// 策略把成员答案/judge 输入输出/候选对比/尝试链/时间线写入它, 供 §13.2.6 还原。
+    pub trace: Option<&'a StrategyTrace>,
 }
 
 /// 由 Router 构造, 持有 models 表 + 解密能力 + 共享 http client + 连接器工厂。
@@ -483,6 +489,34 @@ pub enum StrategyOutput {
 }
 ```
 
+> **调用记录器（CallRecorder）——统计的唯一权威来源**：策略一次执行可能发起多次底层
+> 调用，其中部分成功、部分失败（failover 的前置失败尝试、panel 某成员失败、judge 失败、
+> 流式中途 `Error` 等）。这些"已发生但最终未成功返回"的调用同样要进 §8 统计，但
+> `StrategyOutput` 的 `Stream`/`Full` 只能携带成功路径的数据，`Err(FusionError)` 更是
+> 什么都带不回。为此 `StrategyCtx` 持有一个 `recorder: &CallRecorder`（内部可变累加器）：
+>
+> ```rust
+> pub struct CallRecorder { /* 内部 Mutex<Vec<ModelUsage>> */ }
+> impl CallRecorder {
+>     pub fn record(&self, usage: ModelUsage);     // 每次非流式底层调用完成即推一条(成功或失败)
+>     pub fn drain(&self) -> Vec<ModelUsage>;       // 编排层在策略返回后读取
+> }
+> ```
+>
+> 契约：
+> - **每次非流式底层调用**（`MemberHandle` 的 `complete`）完成时——无论成功还是失败——
+>   策略（或 MemberHandle 的包装）向 `recorder.record(..)` 推一条 `ModelUsage`
+>   （失败的 `status=Failed`，token/cost 据实，多为 0）。
+> - **编排层**（Router 之上、出口层）在策略返回后，**无论 `Ok` 还是 `Err` 都调
+>   `recorder.drain()`** 取走全部已发生的非流式调用，写入 usage_hourly（§8）。因此
+>   `Err(FusionError)` 场景的已付费调用也被统计。
+> - **流式尾调用**：返回 `Stream` 时，最终生效那次调用的用量随流的 `Done` 事件晚到
+>   （见 §6.1），由出口层在流关闭后追加；流中途 `Error` 终止时出口层补记一条 `Failed`。
+>   即 recorder 收集"流之前已完成的非流式调用"，Done/Error 补"流式那一次"。
+> - `UnifiedResponse.calls` 仅作为成功响应自身的视图（便于 playground 直接展示）；
+>   **统计以 recorder.drain() + 流式 Done 为准**，二者对成功的非流式调用内容一致，不重复
+>   写入（出口层去重：Full 路径只用 recorder，不再额外读 `UnifiedResponse.calls`）。
+
 > **模型 id 解析（解决 judge / 工具路由的引用）**：`members` 只含虚拟模型显式配置的
 > 成员，而 `params.judge`（synthesize/best-of-n）与 multimodal 的能力路由表引用的
 > model id **不要求出现在 members 中**。策略通过 `ctx.resolver.resolve(id)` 把任意
@@ -496,7 +530,31 @@ pub enum StrategyOutput {
 > 待流关闭后写入 usage_hourly（见 §8）。因此无论策略返回 `Stream` 还是 `Full`，统计
 > 口径一致。
 
-性质：
+> **策略调试 trace（支撑 playground）**：正常推理路径只需 `StrategyOutput`；但
+> playground（§13.2.6）要还原成员答案、judge 输入输出、speed/cheapest 候选对比、
+> failover 尝试链、multimodal 时间线，这些是 `UnifiedResponse.calls` 表达不了的。为此
+> 定义可选的 `StrategyTrace`（仅当 `StrategyCtx.trace = Some` 时策略才填充，正常请求为
+> `None`，零开销）：
+>
+> ```rust
+> pub struct StrategyTrace { /* 内部 Mutex<TraceData> */ }
+> impl StrategyTrace {
+>     pub fn set_status(&self, status: &str);                 // full|degraded|stop|ok
+>     pub fn add_member_answer(&self, model_id: &str, text: &str, usage: &ModelUsage);
+>     pub fn set_judge(&self, input: &str, output: &str, usage: &ModelUsage);
+>     pub fn add_candidate(&self, model_id: &str, metric: serde_json::Value); // speed吞吐/cheapest成本
+>     pub fn add_attempt(&self, model_id: &str, ok: bool, error: Option<&str>); // failover尝试链
+>     pub fn add_turn(&self, turn: serde_json::Value);        // multimodal 每轮: 主模型输出/tool call/路由/回填
+> }
+> ```
+>
+> 契约：
+> - 每个策略只填与自己相关的字段（panel 类填 member_answer + judge + status；
+>   failover 填 attempt 链；speed/cheapest 填 candidate 对比；multimodal 填 turn 时间线）。
+> - playground 端点构造带 `trace=Some` 的 `StrategyCtx` 跑策略，结束后把 trace 序列化进
+>   响应的 `detail` 字段（§13.2.6 的 JSON）；正常 `/v1/*` 推理入口 `trace=None`，不产生
+>   任何额外开销。
+> - trace 内容仅用于本地调试展示，**不落 usage_hourly**（统计仍走 recorder + 流式 Done）。
 
 - **三层正交**：入口 / 策略 / 出口互不知道对方。
 - **流式由策略自报**：单模型类策略返回 `Stream` 走真流；panel 类返回 `Full`，出口层
@@ -712,6 +770,7 @@ localStorage）。响应 401 → 清 token 跳登录页。后端校验 admin tok
 ```
 # 真实模型
 GET/POST/PUT/DELETE  /admin/api/models[/:id]      # api_key 提交即加密存, 不回显
+                                                  # DELETE 前做完整引用检查(member/judge/能力路由), 有引用返回 409
 # 虚拟模型
 GET/POST/PUT/DELETE  /admin/api/virtual-models[/:name]
 GET                  /admin/api/strategies        # 策略列表 + params schema (驱动动态表单)
@@ -788,8 +847,12 @@ navGroups）：
   - `extra`（可选，文本域填 JSON，zod 校验可解析；连接器私有字段如 default_max_tokens）
   - 提交 → `POST/PUT /admin/api/models`；api_key 提交即加密存储，响应不回显；编辑时
     api_key 占位「已设置（留空则不变）」，留空 PUT 不改密钥。
-- `models-delete-dialog`：`AlertDialog` 确认。若被任一虚拟模型引用为 member/judge，
-  后端返回 409 + 引用列表，前端 toast 阻止并列出引用方。
+- `models-delete-dialog`：`AlertDialog` 确认。后端删除前做**完整引用检查**——扫描
+  所有虚拟模型，若该 model id 被用作 ① `virtual_model_members` 成员、② `params.judge`
+  （synthesize/best-of-n）、③ `params` 里 multimodal 能力路由表（web_search /
+  image_generation / tool_search / image_query）的任一值，则返回 409 + 引用列表（含
+  引用方虚拟模型名 + 引用类型），前端 toast 阻止并列出。仅在零引用时才允许删除，
+  避免删掉被能力路由引用的模型后虚拟模型运行时失效。
 
 #### 13.2.2 虚拟模型 `features/virtual-models/` — 数据源 `GET /admin/api/virtual-models`
 - `virtual-models-table`：列——name、strategy（彩色 badge）、成员数、`row-actions`。
@@ -853,28 +916,34 @@ navGroups）：
 
 #### 13.2.6 调试台 / playground `features/playground/`
 - 表单：虚拟模型 Select（来自 virtual-models query）+ 多行 prompt 输入 +「发送」。
-- 提交 → `POST /admin/api/playground`（body: virtual_name + prompt），后端实际跑一次
-  该虚拟模型的策略并返回结构化编排细节：
+- 提交 → `POST /admin/api/playground`（body: virtual_name + prompt）。后端构造一个
+  `StrategyCtx { trace: Some(..), recorder, want_stream: false }` 跑一次该虚拟模型的
+  策略，把 `recorder.drain()` 合并的用量映射成 `calls`、把 `StrategyTrace` 序列化进
+  `detail`，返回：
   ```json
   {
     "final": "最终回答文本",
     "strategy": "synthesize",
     "status": "full|degraded|stop|ok",
     "calls": [ { "model_id","role","input_tokens","output_tokens","cost","status","latency_secs" } ],
-    "detail": { /* 策略专属 */ }
+    "detail": { /* StrategyTrace 序列化, 字段随策略而异, 见下 */ }
   }
   ```
-  （`calls` 字段对齐 §6.1 的 `ModelUsage`，额外带 `latency_secs` 供展示。）
+  - `calls` 来自 `recorder.drain()`（含失败调用），对齐 §6.1 的 `ModelUsage` 并额外带
+    `latency_secs` 供展示。
+  - `detail` 来自 §6.3 的 `StrategyTrace`：panel 类含 `member_answers[] + judge{input,
+    output} + status`；failover 含 `attempts[]`（尝试链）；speed/cheapest 含
+    `candidates[]`（候选指标对比）；multimodal 含 `turns[]`（时间线）。
 - 展示按策略类型渲染 `detail`（用 `Card` + `Tabs`）：
   - **panel 类（synthesize/best-of-n）**：左侧并排各成员答案卡片（model + 答案 +
-    ok/fail + 用量），右侧 judge 的合成/选优结果；顶部 diversity 分级 badge
-    （full / degraded / stop）。
+    ok/fail + 用量，来自 `detail.member_answers`），右侧 judge 的合成/选优结果
+    （`detail.judge`）；顶部 diversity 分级 badge（`detail.status`）。
   - **单模型类（failover/speed/cheapest）**：显示「被选中模型」+ 选择理由——speed 各
-    候选最近吞吐对比、cheapest 各候选成本估算对比、failover 尝试链（哪些失败、最终
-    哪个成功）。
-  - **multimodal**：时间线视图，逐轮展示「主模型输出 → 触发的 tool call → 路由到哪个
-    后端 → ToolResult → 回填」，直到终止。
-- 底部统一显示本次 `calls` 用量明细表与合计。
+    候选最近吞吐对比、cheapest 各候选成本估算对比（`detail.candidates`）、failover
+    尝试链（`detail.attempts`，哪些失败、最终哪个成功）。
+  - **multimodal**：时间线视图（`detail.turns`），逐轮展示「主模型输出 → 触发的 tool
+    call → 路由到哪个后端 → ToolResult → 回填」，直到终止。
+- 底部统一显示本次 `calls` 用量明细表与合计（含失败调用）。
 
 ### 13.3 前端结构与构建（套用 shadcn-admin 目录范式）
 
