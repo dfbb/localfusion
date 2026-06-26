@@ -148,9 +148,10 @@ export function TraceView({ strategy, detail }: TraceViewProps) {
   const isPanelStrategy = strategy === 'synthesize' || strategy === 'best_of_n' || strategy === 'best-of-n'
   const isMultimodal = strategy === 'multimodal'
 
+  const knownKeys = new Set(['status', 'attempts', 'candidates', 'turns', 'member_answers', 'judge'])
   const hasExtras = !isPanelStrategy && !isMultimodal &&
     !Array.isArray(detail.attempts) && !Array.isArray(detail.candidates) &&
-    Object.keys(detail).filter(k => k !== 'status').length > 0
+    Object.keys(detail).some(k => !knownKeys.has(k))
 
   return (
     <Card>
