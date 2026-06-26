@@ -60,7 +60,7 @@ export const sidebarData: SidebarData = {
         },
         {
           title: '调试台',
-          url: '/debug',
+          url: '/playground',
           icon: Terminal,
         },
         {

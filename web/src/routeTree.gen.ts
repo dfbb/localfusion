@@ -13,6 +13,8 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as AuthenticatedVirtualModelsIndexRouteImport } from './routes/_authenticated/virtual-models/index'
+import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
+import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_authenticated/playground/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 
@@ -36,6 +38,18 @@ const AuthenticatedVirtualModelsIndexRoute =
     path: '/virtual-models/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedSettingsIndexRoute =
+  AuthenticatedSettingsIndexRouteImport.update({
+    id: '/settings/',
+    path: '/settings/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPlaygroundIndexRoute =
+  AuthenticatedPlaygroundIndexRouteImport.update({
+    id: '/playground/',
+    path: '/playground/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedModelsIndexRoute =
   AuthenticatedModelsIndexRouteImport.update({
     id: '/models/',
@@ -53,6 +67,8 @@ export interface FileRoutesByFullPath {
   '/sign-in': typeof authSignInRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
+  '/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/virtual-models/': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -60,6 +76,8 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
+  '/playground': typeof AuthenticatedPlaygroundIndexRoute
+  '/settings': typeof AuthenticatedSettingsIndexRoute
   '/virtual-models': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRoutesById {
@@ -69,13 +87,29 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
+  '/_authenticated/playground/': typeof AuthenticatedPlaygroundIndexRoute
+  '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/virtual-models/': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sign-in' | '/keys/' | '/models/' | '/virtual-models/'
+  fullPaths:
+    | '/'
+    | '/sign-in'
+    | '/keys/'
+    | '/models/'
+    | '/playground/'
+    | '/settings/'
+    | '/virtual-models/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/sign-in' | '/' | '/keys' | '/models' | '/virtual-models'
+  to:
+    | '/sign-in'
+    | '/'
+    | '/keys'
+    | '/models'
+    | '/playground'
+    | '/settings'
+    | '/virtual-models'
   id:
     | '__root__'
     | '/_authenticated'
@@ -83,6 +117,8 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
+    | '/_authenticated/playground/'
+    | '/_authenticated/settings/'
     | '/_authenticated/virtual-models/'
   fileRoutesById: FileRoutesById
 }
@@ -121,6 +157,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedVirtualModelsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/settings/': {
+      id: '/_authenticated/settings/'
+      path: '/settings'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof AuthenticatedSettingsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/playground/': {
+      id: '/_authenticated/playground/'
+      path: '/playground'
+      fullPath: '/playground/'
+      preLoaderRoute: typeof AuthenticatedPlaygroundIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/models/': {
       id: '/_authenticated/models/'
       path: '/models'
@@ -142,6 +192,8 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
+  AuthenticatedPlaygroundIndexRoute: typeof AuthenticatedPlaygroundIndexRoute
+  AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
   AuthenticatedVirtualModelsIndexRoute: typeof AuthenticatedVirtualModelsIndexRoute
 }
 
@@ -149,6 +201,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
+  AuthenticatedPlaygroundIndexRoute: AuthenticatedPlaygroundIndexRoute,
+  AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   AuthenticatedVirtualModelsIndexRoute: AuthenticatedVirtualModelsIndexRoute,
 }
 
