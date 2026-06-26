@@ -49,7 +49,7 @@ export function KeysEditLabelDialog({ open, onOpenChange, currentRow }: Props) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>修改标签</DialogTitle>
-          <DialogDescription>修改密钥 {currentRow.id} 的标签。</DialogDescription>
+          <DialogDescription>修改密钥 {currentRow.label} 的标签。</DialogDescription>
         </DialogHeader>
         <form id="key-label-form" onSubmit={handleSubmit} className="py-2">
           <Input
