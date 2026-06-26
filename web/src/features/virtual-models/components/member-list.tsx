@@ -45,7 +45,7 @@ export function MemberList({ value, onChange, models, hint }: Props) {
         <p className="text-xs text-muted-foreground">{hint}</p>
       )}
       {value.map((memberId, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div key={`${i}-${memberId}`} className="flex items-center gap-2">
           <span className="w-5 text-xs text-muted-foreground text-right shrink-0">{i + 1}.</span>
           <Select value={memberId} onValueChange={(v) => handleChange(i, v)}>
             <SelectTrigger className="flex-1 h-8">
