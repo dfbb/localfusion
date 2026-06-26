@@ -1,8 +1,8 @@
 // admin/api.rs — 管理 REST API 各端点路由实现
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, put};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -332,7 +332,7 @@ async fn create_key(
         return r;
     }
     let label = body.get("label").and_then(|v| v.as_str());
-    let plaintext = format!("sk-lf-{}", uuid_like());
+    let plaintext = random_key();
     let now = now_secs();
     match s.db.key_insert(&plaintext, label, now).await {
         Ok(id) => Json(serde_json::json!({"id": id, "key": plaintext})).into_response(),
@@ -397,7 +397,7 @@ async fn set_acl(
     }
 }
 
-// 简易随机串（不引第三方）
+// 当前 Unix 秒
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -405,12 +405,16 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn uuid_like() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{nanos:x}")
+// ingress key：使用 CSPRNG 生成 24 字节随机熵（不可预测）
+fn random_key() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    format!(
+        "sk-lf-{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    )
 }
 
 // ─── stats ──────────────────────────────────────────────────────────────────
@@ -486,11 +490,31 @@ async fn stats_latency(
     if let Err(r) = require_admin(&s, &h).await {
         return r;
     }
-    let model = q.get("model").cloned().unwrap_or_default();
-    match s.db.latency_avg_recent(&model, 10).await {
-        Ok(avg) => Json(serde_json::json!({"model": model, "avg_throughput": avg})).into_response(),
-        Err(e) => err_response(e),
+    // model 可选：指定则返回单模型，缺省则返回所有模型数组
+    let models: Vec<String> = match q.get("model").filter(|m| !m.is_empty()) {
+        Some(m) => vec![m.clone()],
+        None => match s.db.model_list().await {
+            Ok(rows) => rows.into_iter().map(|m| m.id).collect(),
+            Err(e) => return err_response(e),
+        },
+    };
+    let mut out = Vec::with_capacity(models.len());
+    for model_id in models {
+        let avg = match s.db.latency_avg_recent(&model_id, 10).await {
+            Ok(v) => v,
+            Err(e) => return err_response(e),
+        };
+        let count = match s.db.latency_sample_count(&model_id, 10).await {
+            Ok(v) => v,
+            Err(e) => return err_response(e),
+        };
+        out.push(serde_json::json!({
+            "model_id": model_id,
+            "avg_throughput": avg.unwrap_or(0.0),
+            "sample_count": count,
+        }));
     }
+    Json(out).into_response()
 }
 
 async fn stats_requests(State(s): State<AdminState>, h: HeaderMap) -> Response {
@@ -537,8 +561,91 @@ async fn stats_requests(State(s): State<AdminState>, h: HeaderMap) -> Response {
     }
 }
 
-// ─── logging settings ───────────────────────────────────────────────────────
+// ─── playground ───────────────────────────────────────────────────────────────
 
+fn err_json(code: StatusCode, msg: &str) -> Response {
+    (code, Json(serde_json::json!({"error": msg}))).into_response()
+}
+
+pub fn playground_routes() -> Router<AdminState> {
+    Router::new().route("/admin/api/playground", post(playground_handler))
+}
+
+/// body: { virtual_name, prompt? } — 简化版调试调用（无完整 trace 入库）
+async fn playground_handler(
+    State(s): State<AdminState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if let Err(r) = require_admin(&s, &headers).await {
+        return r;
+    }
+    let virtual_name = match body.get("virtual_name").and_then(|v| v.as_str()) {
+        Some(v) => v.to_string(),
+        None => return err_json(StatusCode::BAD_REQUEST, "virtual_name required"),
+    };
+    let prompt = body
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let req = crate::unified::UnifiedRequest {
+        items: vec![crate::unified::Item::Message {
+            role: crate::unified::Role::User,
+            content: vec![crate::unified::ContentBlock::Text(prompt)],
+        }],
+        tools: vec![],
+        max_tokens: Some(1024),
+        temperature: None,
+        stream: false,
+        raw_extra: serde_json::Value::Null,
+    };
+    let router = crate::router::Router::new(s.db.clone(), s.enc_key);
+    let recorder = crate::unified::CallRecorder::default();
+    let trace = crate::unified::StrategyTrace::default();
+    match router
+        .dispatch(&virtual_name, req, false, &recorder, Some(&trace))
+        .await
+    {
+        Ok(crate::strategy::StrategyOutput::Full(resp)) => {
+            let text = resp
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    crate::unified::Item::Message { content, .. } => Some(
+                        content
+                            .iter()
+                            .filter_map(|c| match c {
+                                crate::unified::ContentBlock::Text(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect::<String>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let calls = recorder.drain();
+            Json(serde_json::json!({
+                "final": text,
+                "calls": calls,
+                "detail": trace.snapshot(),
+            }))
+            .into_response()
+        }
+        Ok(_) => err_json(StatusCode::INTERNAL_SERVER_ERROR, "unexpected stream"),
+        Err(e) => {
+            let calls = recorder.drain();
+            Json(serde_json::json!({
+                "error": e.to_string(),
+                "calls": calls,
+                "detail": trace.snapshot(),
+            }))
+            .into_response()
+        }
+    }
+}
+
+// ─── logging settings ───────────────────────────────────────────────────────
 pub fn logging_routes() -> Router<AdminState> {
     Router::new().route(
         "/admin/api/settings/logging",

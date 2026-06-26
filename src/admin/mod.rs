@@ -58,6 +58,7 @@ pub fn router(state: AdminState) -> Router {
         .merge(api::vmodels_routes())
         .merge(api::keys_routes())
         .merge(api::stats_routes())
+        .merge(api::playground_routes())
         .merge(api::logging_routes())
         .fallback(get(static_assets::serve))
         .with_state(state)
