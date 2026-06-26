@@ -34,6 +34,8 @@ axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 clap = { version = "4", features = ["derive"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

@@ -59,7 +59,7 @@ pub fn router(state: AdminState) -> Router {
         .merge(api::keys_routes())
         .merge(api::stats_routes())
         .merge(api::logging_routes())
-        .route("/", get(static_assets::serve_index))
+        .fallback(get(static_assets::serve))
         .with_state(state)
 }
 
