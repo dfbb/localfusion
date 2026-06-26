@@ -37,7 +37,6 @@ export function LatencyChart() {
   const chartData = rows.map((r) => ({
     model: r.model_id.length > 20 ? r.model_id.slice(0, 20) + '…' : r.model_id,
     throughput: Math.round(r.avg_throughput),
-    ttft_ms: Math.round(r.avg_ttft_ms),
     samples: r.sample_count,
   }))
 
@@ -51,7 +50,7 @@ export function LatencyChart() {
           formatter={(v, name) =>
             name === 'throughput'
               ? [`${v} tok/s`, '吞吐量']
-              : [`${v} ms`, '首 Token 延迟']
+              : [`${v}`, name]
           }
         />
         <Bar dataKey="throughput" name="throughput" fill="hsl(221 83% 53%)" radius={[3, 3, 0, 0]} />
