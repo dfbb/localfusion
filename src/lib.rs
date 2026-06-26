@@ -2,4 +2,6 @@ pub mod connector;
 pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod router;
+pub mod strategy;
 pub mod unified;
