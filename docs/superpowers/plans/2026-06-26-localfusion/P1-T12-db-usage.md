@@ -1,0 +1,132 @@
+# P1-T12 usage_hourly 聚合 + request_log
+
+**阶段:** 1 基础层 · **前置:** P1-T05 · 见全局约束: `00-index.md`
+
+**Goal:** 小时聚合原子累加 upsert + 查询 + request_log（设计 §8）。
+
+**Files:** Modify: `src/db/usage.rs`
+
+**Produces:** `UsageDelta{input_tokens,output_tokens,cost,errors}`、`UsageRow{...}`（`FromRow+Serialize`）；`Db::{usage_upsert,usage_query,request_log_insert}`。
+
+- [ ] **Step 1: 写失败测试**
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    #[tokio::test]
+    async fn upsert_accumulates() {
+        let db = Db::open_memory().await.unwrap();
+        let d = UsageDelta { input_tokens: 5, output_tokens: 7, cost: 0.1, errors: 0 };
+        db.usage_upsert(1000, "total", "", 1, &d).await.unwrap();
+        db.usage_upsert(1000, "total", "", 1, &d).await.unwrap();
+        let rows = db.usage_query("total", None, 0, 2000).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].requests, 2);
+        assert_eq!(rows[0].input_tokens, 10);
+        assert_eq!(rows[0].total_tokens, 24);
+        assert!((rows[0].cost - 0.2).abs() < 1e-9);
+    }
+    #[tokio::test]
+    async fn query_filters_by_scope_name_and_time() {
+        let db = Db::open_memory().await.unwrap();
+        let d = UsageDelta { input_tokens: 1, output_tokens: 1, cost: 0.0, errors: 1 };
+        db.usage_upsert(1000, "real", "gpt-4o", 1, &d).await.unwrap();
+        db.usage_upsert(1000, "real", "claude", 1, &d).await.unwrap();
+        db.usage_upsert(5000, "real", "gpt-4o", 1, &d).await.unwrap();
+        let rows = db.usage_query("real", Some("gpt-4o"), 0, 2000).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].errors, 1);
+        assert_eq!(db.usage_query("real", None, 0, 9000).await.unwrap().len(), 3);
+    }
+    #[tokio::test]
+    async fn request_log_writes() {
+        let db = Db::open_memory().await.unwrap();
+        db.request_log_insert("vf", "failover", "ok", 12, 0.01, 100).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM request_log").fetch_one(&db.pool).await.unwrap();
+        assert_eq!(n, 1);
+    }
+}
+```
+
+- [ ] **Step 2: 运行确认失败** — Run: `cargo test --lib db::usage` → FAIL。
+
+- [ ] **Step 3: 实现**
+
+```rust
+use crate::db::Db;
+use crate::error::FusionError;
+
+pub struct UsageDelta {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost: f64,
+    pub errors: u64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct UsageRow {
+    pub hour_ts: i64,
+    pub scope: String,
+    pub name: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub total_tokens: i64,
+    pub cost: f64,
+    pub errors: i64,
+}
+
+impl Db {
+    pub async fn usage_upsert(&self, hour_ts: i64, scope: &str, name: &str,
+        requests: u64, d: &UsageDelta) -> Result<(), FusionError> {
+        let total = (d.input_tokens + d.output_tokens) as i64;
+        sqlx::query(
+            "INSERT INTO usage_hourly(hour_ts,scope,name,requests,input_tokens,output_tokens,total_tokens,cost,errors)
+             VALUES(?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(hour_ts,scope,name) DO UPDATE SET
+               requests=requests+excluded.requests,
+               input_tokens=input_tokens+excluded.input_tokens,
+               output_tokens=output_tokens+excluded.output_tokens,
+               total_tokens=total_tokens+excluded.total_tokens,
+               cost=cost+excluded.cost, errors=errors+excluded.errors")
+            .bind(hour_ts).bind(scope).bind(name).bind(requests as i64)
+            .bind(d.input_tokens as i64).bind(d.output_tokens as i64).bind(total)
+            .bind(d.cost).bind(d.errors as i64).execute(&self.pool).await?;
+        Ok(())
+    }
+    pub async fn usage_query(&self, scope: &str, name: Option<&str>, from_ts: i64, to_ts: i64)
+        -> Result<Vec<UsageRow>, FusionError> {
+        let rows = match name {
+            Some(n) => sqlx::query_as::<_, UsageRow>(
+                "SELECT * FROM usage_hourly WHERE scope=? AND name=? AND hour_ts BETWEEN ? AND ? ORDER BY hour_ts")
+                .bind(scope).bind(n).bind(from_ts).bind(to_ts).fetch_all(&self.pool).await?,
+            None => sqlx::query_as::<_, UsageRow>(
+                "SELECT * FROM usage_hourly WHERE scope=? AND hour_ts BETWEEN ? AND ? ORDER BY hour_ts")
+                .bind(scope).bind(from_ts).bind(to_ts).fetch_all(&self.pool).await?,
+        };
+        Ok(rows)
+    }
+    pub async fn request_log_insert(&self, virtual_name: &str, strategy: &str, status: &str,
+        total_tokens: i64, cost: f64, created_at: i64) -> Result<(), FusionError> {
+        sqlx::query("INSERT INTO request_log(virtual_name, strategy, status, total_tokens, cost, created_at)
+             VALUES(?,?,?,?,?,?)")
+            .bind(virtual_name).bind(strategy).bind(status).bind(total_tokens).bind(cost).bind(created_at)
+            .execute(&self.pool).await?;
+        Ok(())
+    }
+}
+```
+
+- [ ] **Step 4: 运行确认通过** — Run: `cargo test --lib db::usage` → PASS（3 个）。
+
+- [ ] **Step 5: 全量构建 + 提交**
+
+```bash
+cargo build && cargo test && cargo clippy --all-targets
+git add src/db/usage.rs
+git commit -m "feat: usage_hourly 原子累加 + 查询 + request_log 写入"
+```
+
+> **阶段 1 完成**：基础层全部就绪，可建库/加密/读写所有表。
