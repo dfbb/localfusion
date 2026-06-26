@@ -550,10 +550,12 @@ pub enum StrategyOutput {
 > `models` 表，否则拒绝（fail-fast，见 §3）。这样 judge 可以是一个不参与 panel 的
 > 独立模型，能力路由也能指向任意专用后端。
 
-> **流式下的用量统计**：`UnifiedStream` 的终止 `Done` 事件携带最终 `ModelUsage`
-> （定义见 §6.1「UnifiedStream 事件模型」）。出口层转发流给客户端的同时缓存这条用量，
-> 待流关闭后写入 usage_hourly（见 §8）。因此无论策略返回 `Stream` 还是 `Full`，统计
-> 口径一致。
+> **流式下的用量统计**：`UnifiedStream` 的终止 `Done` 事件携带 `call:
+> Option<ModelUsage>`——真流时 `call=Some(该次调用)` 是统计输入，`usage: Usage` 是
+> 给客户端的合计；panel 伪流时 `call=None`（成员/judge 已入 recorder，避免重复计数）。
+> `Error` 终止时 `call=Some(Failed)`。出口层在流关闭后把 `Done.call`/`Error.call`
+> （若 `Some`）并入 `all_calls` 写 usage_hourly（见 §6.1、§8）。因此无论策略返回
+> `Stream` 还是 `Full`，统计口径一致且不重复。
 
 > **策略调试 trace（支撑 playground）**：正常推理路径只需 `StrategyOutput`；但
 > playground（§13.2.6）要还原成员答案、judge 输入输出、speed/cheapest 候选对比、
@@ -636,15 +638,13 @@ pub enum StrategyOutput {
   4. 主模型某轮**不再发 ToolCall** → 该轮即终结轮。
 - 安全：工具回合后端只做受限能力，不暴露任意 bash/edit（参考 OpenPrism judge 隔离）。
 - `max_iterations` 防死循环（params 可配，默认 6）。
-- **流式语义（修正）**：带 tools 时无法在产出前预知某轮是否会发 ToolCall，故
-  「最后一轮直接真流」不成立。采用两种确定性方案，由 params `stream_mode` 选择：
-  - `buffered`（默认）：整个 loop 全程非流式 `complete`；得到终结轮的完整回答后，出口层
-    把它切成伪流 SSE 发给客户端（同 panel 伪流，`Done.call=None`，各轮已入 recorder）。
-  - `final_reflow`：loop 全程非流式直到确定终结轮（已无 ToolCall）；随后**对最终上下文
-    禁用 tools 再发一次流式请求**（保证这一次不可能产生 ToolCall），真流给客户端。这次
-    真流是一次额外的底层调用，照常以 `Done.call=Some(..)` 入统计。
-  二者都不依赖「猜测某轮是否产生工具调用」，逻辑上成立。`final_reflow` 多一次调用换取
-  真实首字延迟，`buffered` 省调用但首字延迟等于整个 loop。
+- **流式语义（buffered 单一方案）**：带 tools 时无法在产出前预知某轮是否会发 ToolCall，
+  故「最后一轮直接真流」不成立。multimodal **全程 `buffered`**：整个 loop 用非流式
+  `complete`，每轮入 recorder；得到终结轮（已无 ToolCall）的完整回答后，出口层把它切成
+  伪流 SSE 发给客户端（同 panel 伪流，`Done.call=None`，各轮已入 recorder）。
+  - 不采用「禁用 tools 再发一次真流」方案：它会重复计费、且第二次可能产出与终结轮不同的
+    答案（语义分歧）。multimodal 本就是多轮慢请求，buffered 后伪流的取舍与 panel 一致，
+    保持简单与统计口径统一。客户端若需要真实首字延迟，应改用单模型策略。
 
 ---
 
@@ -918,7 +918,7 @@ navGroups）：
     - `cheapest`：`tokenizer`（Select：approx | tiktoken）、输出估算上限（数字）
     - `multimodal`：能力路由表——`web_search` / `image_generation` / `tool_search` /
       `image_query` 各一个真实模型 Select（可留空 = 不支持该能力）、`max_iterations`
-      （数字）、`stream_mode`（Select：buffered | final_reflow，见 §7.6）
+      （数字）。multimodal 流式固定 buffered（见 §7.6），无需配置。
   - 提交 → `POST/PUT /admin/api/virtual-models`，body 含 strategy + params(JSON) +
     members(有序数组)。
 - 删除同 13.2.1 模式。
