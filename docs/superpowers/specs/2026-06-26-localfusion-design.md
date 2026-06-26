@@ -517,30 +517,35 @@ pub enum StrategyOutput {
 > ```rust
 > pub struct CallRecorder { /* 内部 Mutex<Vec<ModelUsage>> */ }
 > impl CallRecorder {
->     pub fn record(&self, usage: ModelUsage);     // 每次非流式底层调用完成即推一条(成功或失败)
->     pub fn drain(&self) -> Vec<ModelUsage>;       // 编排层在策略返回后读取
+>     pub fn record(&self, usage: ModelUsage);     // 每次非流式调用/流式前置失败即推一条
+>     pub fn drain(&self) -> Vec<ModelUsage>;       // 出口层在确定可写库时取走(见下方时机)
 > }
 > ```
 >
-> 契约：
-> - **每次非流式底层调用**（`MemberHandle` 的 `complete`）完成时——无论成功还是失败——
->   策略（或 MemberHandle 的包装）向 `recorder.record(..)` 推一条 `ModelUsage`
->   （失败的 `status=Failed`，token/cost 据实，多为 0）。
-> - **每次流式尝试在 `Started` 之前失败**（`MemberHandle` 的 `stream()` 直接返回
->   `Err`，即建连/状态码/首事件失败）也必须 `recorder.record(..)` 推一条
->   `status=Failed` 的 `ModelUsage`。这覆盖**流式 failover 的前置失败尝试**——它跳过
->   失败成员去试下一个，每个失败成员都留一条记录，不漏统计。
-> - **编排层**（Router 之上、出口层）在策略返回后，**无论 `Ok` 还是 `Err` 都调
->   `recorder.drain()`** 取走全部已发生的调用，写入 usage_hourly（§8）。因此
->   `Err(FusionError)` 场景的已付费调用也被统计。
-> - **流式尾调用**：返回 `Stream` 时，最终**成功 `Started`** 那次调用的用量随流的
->   `Done` 事件晚到（见 §6.1），由出口层在流关闭后追加；流中途 `Error` 终止时出口层补记
->   一条 `Failed`。即 recorder 收集"所有非流式调用 + 流式 Started 前失败的尝试"，
->   Done/Error 只补"最终那条成功建立的流"。三者无重叠：失败的流式尝试进 recorder，
->   成功建立的流只通过 Done/Error 记一次。
-> - `UnifiedResponse.calls` 仅作为成功响应自身的视图（便于 playground 直接展示）；
->   **统计以 `recorder.drain()` + 流式 `Done`/`Error` 为准**，Full 路径只用 recorder，
->   不再额外读 `UnifiedResponse.calls`（避免重复写入）。
+> 契约（按统计写入时机分两段）：
+>
+> **策略执行期间——只 record，不写库**：
+> - **每次非流式底层调用**（`MemberHandle.complete`）完成时——无论成功失败——向
+>   `recorder.record(..)` 推一条 `ModelUsage`（失败 `status=Failed`，token/cost 据实）。
+> - **每次流式尝试在 `Started` 之前失败**（`MemberHandle.stream()` 直接返回 `Err`：
+>   建连/状态码/首事件失败）也 `recorder.record(..)` 推一条 `Failed`。覆盖**流式
+>   failover 的前置失败尝试**（跳过失败成员去试下一个，每个失败成员留一条记录）。
+> - **注意**：成功建立的那条流（最终返回给客户端的 `Stream`）的用量**不进 recorder**，
+>   它随流的 `Done.call`/`Error.call` 在流结束时才可知（见 §6.1），由下面第二段处理。
+>
+> **统计写入时机——分流式/非流式两种路径**（出口层负责，是写 usage_hourly 的唯一处）：
+> - **`StrategyOutput::Full`（含 panel 伪流、multimodal buffered、`want_stream=false`
+>   的单模型）**：策略返回后立即 `recorder.drain()` 得到全部调用，构造 `all_calls` 写
+>   usage_hourly。此路径无未决的流式尾调用。`Err(FusionError)` 也走这里（drain 出已发生
+>   的调用，requests/errors 照记，见 §8）。
+> - **`StrategyOutput::Stream`（真流，仅单模型类 failover/speed/cheapest 且
+>   `want_stream=true`）**：出口层先 `recorder.drain()` 暂存「流之前的失败尝试」，再把流
+>   转发给客户端；**待流以 `Done`/`Error` 关闭后**，把 `Done.call`/`Error.call`（若
+>   `Some`）追加进暂存集，合成 `all_calls` 再写 usage_hourly。即真流的统计**延迟到流结束
+>   才落库**，不是"策略返回后立刻"。
+> - 两条路径下，每条底层调用都只被记一次：失败尝试经 recorder，最终成功的真流经
+>   `Done/Error.call`，panel 成员/judge 经 recorder（伪流 `Done.call=None` 不重复）。
+> - `UnifiedResponse.calls` 不参与统计（仅响应自身视图，见 §6.1）。
 
 > **模型 id 解析（解决 judge / 工具路由的引用）**：`members` 只含虚拟模型显式配置的
 > 成员，而 `params.judge`（synthesize/best-of-n）与 multimodal 的能力路由表引用的
@@ -581,11 +586,19 @@ pub enum StrategyOutput {
 > - playground 端点构造带 `trace=Some` 的 `StrategyCtx` 跑策略，结束后把 trace 序列化进
 >   响应的 `detail` 字段（§13.2.6 的 JSON）；正常 `/v1/*` 推理入口 `trace=None`，不产生
 >   任何额外开销。
-> - trace 内容仅用于本地调试展示，**不落 usage_hourly**（统计仍走 recorder + 流式 Done）。
+> - trace 内容仅用于本地调试展示，**不落 usage_hourly**（统计仍走 §6.3 的
+>   recorder + 流式 `Done`/`Error.call`）。
 
 - **三层正交**：入口 / 策略 / 出口互不知道对方。
-- **流式由策略自报**：单模型类策略返回 `Stream` 走真流；panel 类返回 `Full`，出口层
-  按 `want_stream` 包成伪流 SSE。落地「能真流则真流，否则伪流」。
+- **流式由策略按 `want_stream` 自报**，规则明确：
+  - **panel 类（synthesize/best-of-n）与 multimodal**：恒返回 `Full`（内部全是
+    `complete`）。`want_stream=true` 时出口层把 `Full` 切成伪流 SSE，否则直接非流式响应。
+  - **单模型类（failover/speed/cheapest）**：
+    - `want_stream=true` → 选中成员走 `stream()`，返回 `Stream`（真流）。
+    - `want_stream=false` → 选中成员走 `complete()`，返回 `Full`（非流式）。
+  - 因此 `want_stream=false`（普通非流式 SDK 请求、playground）下**所有策略都返回
+    `Full`**，出口层得到 `UnifiedResponse` 直接非流式返回；`Stream` 只在
+    `want_stream=true` 且单模型类时出现。无需额外的 Stream→Full 聚合层。
 - **策略读 DB**：speed/cheapest 通过 `StrategyCtx.db` 查表决策，决策即普通 SQL。
 - **策略注册表**：`strategy/mod.rs` 维护 `name → Box<dyn Strategy>`，加新策略只需实现
   trait + 注册一行。
@@ -594,23 +607,24 @@ pub enum StrategyOutput {
 
 ## 7. 六个策略的编排逻辑
 
-### 7.1 failover（故障转移）— 单模型, 真流式
+### 7.1 failover（故障转移）— 单模型, want_stream=true 时真流 否则非流式
 - 按 members position 顺序逐个尝试，第一个成功即返回。
 - 失败判定：连接错误 / 5xx / 超时（params `timeout_secs`）。失败记 error 日志，下一个。
 - **每个失败的尝试都向 `recorder.record()` 推一条 `status=Failed` 的 `ModelUsage`**
   （流式尝试在 `Started` 前失败同样记，见 §6.3），保证失败尝试进统计。
 - 全部失败 → 返回最后一个错误。
-- 流式边界：**只在「建连 + 首个事件（`Started`）成功」之前可故障转移**；`Started` 之后
-  中断直接报错（token 已发给客户端，无法回退）。
+- `want_stream=true`（真流）的流式边界：**只在「建连 + 首个事件（`Started`）成功」之前
+  可故障转移**；`Started` 之后中断直接报错（token 已发给客户端，无法回退）。
+  `want_stream=false` 时各成员走 `complete()`，失败可一直转移到最后一个成员，无此边界。
 
-### 7.2 speed（最快）— 单模型, 真流式
+### 7.2 speed（最快）— 单模型, want_stream=true 时真流 否则非流式
 - 查 latency_samples：每个 member 取最近 10 条 `AVG(throughput)`，选最高者单模型调用。
 - 无样本 member 给乐观默认值让其有机会被探测（params `explore` 可调）。
 - 每次真实请求结束写一条 latency_sample（throughput, is_probe=0）。
 - 后台探测任务（tokio interval）：对最近 N 分钟无样本的 member 发小探测请求，
   写 is_probe=1 样本，保持数据新鲜。
 
-### 7.3 cheapest（最便宜）— 单模型, 真流式
+### 7.3 cheapest（最便宜）— 单模型, want_stream=true 时真流 否则非流式
 - 候选 join prices，按 `price_in×估算输入 + price_out×估算输出` 选最低。
 - 输入 tokens 用请求内容估算（字符数/4 近似或 tokenizer，params `tokenizer` 可调），
   输出用 max_tokens 或历史均值。
@@ -653,7 +667,8 @@ pub enum StrategyOutput {
 `request_log` 保留逐条明细（playground/排错）；**累计历史用 `usage_hourly` 预聚合**，
 避免每次展示扫全表。
 
-每次请求结束，出口层汇总该请求的**全部底层调用用量**——来源是
+每次请求结束（`Full` 路径 = 策略返回时；`Stream` 路径 = 流以 `Done`/`Error` 关闭时，
+见 §6.3 的写入时机），出口层汇总该请求的**全部底层调用用量**——来源是
 `recorder.drain()`（所有非流式调用，含失败）**加上**真流那一次的尾用量
 （`UnifiedStream` 的 `Done.call`，或中途 `Error` 的 `call`；`call=None` 的伪流不贡献，
 因其成员调用已在 recorder 中）。这份合并后的
