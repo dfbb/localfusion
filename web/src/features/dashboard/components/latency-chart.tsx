@@ -14,7 +14,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 interface LatencyRow {
   model_id: string
   avg_throughput: number // tokens/sec
-  avg_ttft_ms: number
   sample_count: number
 }
 

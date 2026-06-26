@@ -28,6 +28,15 @@ impl Db {
             .bind(since_ts).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
+    /// 最近 limit 条样本数（用于 latency 统计展示）
+    pub async fn latency_sample_count(&self, model_id: &str, limit: i64) -> Result<i64, FusionError> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM (
+               SELECT 1 FROM latency_samples
+               WHERE model_id = ? ORDER BY created_at DESC LIMIT ?)")
+            .bind(model_id).bind(limit).fetch_one(&self.pool).await?;
+        Ok(n)
+    }
 }
 
 #[cfg(test)]
