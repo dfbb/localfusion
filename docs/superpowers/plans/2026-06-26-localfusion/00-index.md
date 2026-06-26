@@ -48,10 +48,10 @@
 - [ ] P3-T02-failover.md — failover（含 mock 测试设施）
 - [ ] P3-T03-speed.md — speed
 - [ ] P3-T04-cheapest.md — cheapest
+- [ ] P3-T08-router.md — ModelResolver + Router（前置于 T05/06/07，提供 with_mock 钩子）
 - [ ] P3-T05-synthesize.md — synthesize
 - [ ] P3-T06-best-of-n.md — best-of-n
 - [ ] P3-T07-multimodal.md — multimodal
-- [ ] P3-T08-router.md — ModelResolver + Router
 
 ### 阶段 4：入口 / 鉴权 / 管理 API / 装配（完成 Spec A）
 - [ ] P4-T01-logging.md — 日志系统
