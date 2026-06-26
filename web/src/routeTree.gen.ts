@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
+import { Route as AuthenticatedVirtualModelsIndexRouteImport } from './routes/_authenticated/virtual-models/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -28,6 +29,12 @@ const authSignInRoute = authSignInRouteImport.update({
   path: '/sign-in',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedVirtualModelsIndexRoute =
+  AuthenticatedVirtualModelsIndexRouteImport.update({
+    id: '/virtual-models/',
+    path: '/virtual-models/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedModelsIndexRoute =
   AuthenticatedModelsIndexRouteImport.update({
     id: '/models/',
@@ -39,11 +46,13 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/sign-in': typeof authSignInRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
+  '/virtual-models/': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRoutesByTo {
   '/sign-in': typeof authSignInRoute
   '/': typeof AuthenticatedIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
+  '/virtual-models': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -51,18 +60,20 @@ export interface FileRoutesById {
   '/(auth)/sign-in': typeof authSignInRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
+  '/_authenticated/virtual-models/': typeof AuthenticatedVirtualModelsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sign-in' | '/models/'
+  fullPaths: '/' | '/sign-in' | '/models/' | '/virtual-models/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/sign-in' | '/' | '/models'
+  to: '/sign-in' | '/' | '/models' | '/virtual-models'
   id:
     | '__root__'
     | '/_authenticated'
     | '/(auth)/sign-in'
     | '/_authenticated/'
     | '/_authenticated/models/'
+    | '/_authenticated/virtual-models/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,6 +104,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof authSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/virtual-models/': {
+      id: '/_authenticated/virtual-models/'
+      path: '/virtual-models'
+      fullPath: '/virtual-models/'
+      preLoaderRoute: typeof AuthenticatedVirtualModelsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/models/': {
       id: '/_authenticated/models/'
       path: '/models'
@@ -106,11 +124,13 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
+  AuthenticatedVirtualModelsIndexRoute: typeof AuthenticatedVirtualModelsIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,
+  AuthenticatedVirtualModelsIndexRoute: AuthenticatedVirtualModelsIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
