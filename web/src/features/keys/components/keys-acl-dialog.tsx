@@ -5,6 +5,7 @@ import { Label as LabelPrimitive } from 'radix-ui'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Dialog,
   DialogContent,
@@ -73,28 +74,20 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
 
         <div className="space-y-4 py-2">
           {/* Mode selector as radio-style */}
-          <div className="flex flex-col gap-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="acl-mode"
-                checked={aclAll}
-                onChange={() => setAclAll(true)}
-                className="accent-primary"
-              />
-              <span className="text-sm">允许访问全部虚拟模型</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="acl-mode"
-                checked={!aclAll}
-                onChange={() => setAclAll(false)}
-                className="accent-primary"
-              />
-              <span className="text-sm">指定白名单</span>
-            </label>
-          </div>
+          <RadioGroup value={aclAll ? 'all' : 'whitelist'} onValueChange={(val: string) => setAclAll(val === 'all')}>
+            <div className="flex items-center gap-2">
+              <RadioGroupItem value="all" id="acl-all" />
+              <LabelPrimitive.Root htmlFor="acl-all" className="text-sm cursor-pointer">
+                允许访问全部虚拟模型
+              </LabelPrimitive.Root>
+            </div>
+            <div className="flex items-center gap-2">
+              <RadioGroupItem value="whitelist" id="acl-whitelist" />
+              <LabelPrimitive.Root htmlFor="acl-whitelist" className="text-sm cursor-pointer">
+                指定白名单
+              </LabelPrimitive.Root>
+            </div>
+          </RadioGroup>
 
           {/* Model list */}
           {!aclAll && (
