@@ -44,7 +44,8 @@ pub fn init(level: &str, log_file: Option<&str>, to_stdout: bool) -> LogHandle {
                 .with_ansi(false),
         )
     });
-    registry.with(stdout_layer).with(file_layer).init();
+    // 使用 try_init 让测试中多次调用不 panic（第一次初始化全局 subscriber）
+    let _ = registry.with(stdout_layer).with(file_layer).try_init();
     LogHandle { reload }
 }
 
