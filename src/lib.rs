@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod ingress;
 pub mod logging;
+pub mod pipeline;
 pub mod router;
 pub mod strategy;
 pub mod unified;
