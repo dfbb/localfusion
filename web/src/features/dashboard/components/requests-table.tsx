@@ -1,0 +1,206 @@
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { format } from 'date-fns'
+import {
+  type ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  type SortingState,
+  useReactTable,
+} from '@tanstack/react-table'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { api } from '@/lib/api'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+
+interface RequestRow {
+  id: string
+  created_at: string
+  virtual_model: string | null
+  real_model: string | null
+  status: string
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost: number
+  latency_ms: number | null
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  ok: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+  error: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+  timeout: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+}
+
+const STATUSES = ['全部', 'ok', 'error', 'timeout']
+
+const columns: ColumnDef<RequestRow>[] = [
+  {
+    accessorKey: 'created_at',
+    header: '时间',
+    cell: ({ getValue }) => (
+      <span className="text-xs text-muted-foreground whitespace-nowrap">
+        {format(new Date(getValue<string>()), 'MM-dd HH:mm:ss')}
+      </span>
+    ),
+  },
+  {
+    accessorKey: 'status',
+    header: '状态',
+    cell: ({ getValue }) => {
+      const s = getValue<string>()
+      return (
+        <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${STATUS_COLORS[s] ?? 'bg-muted'}`}>
+          {s}
+        </span>
+      )
+    },
+  },
+  {
+    accessorKey: 'virtual_model',
+    header: '虚拟模型',
+    cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string | null>() ?? '-'}</span>,
+  },
+  {
+    accessorKey: 'real_model',
+    header: '底层模型',
+    cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string | null>() ?? '-'}</span>,
+  },
+  { accessorKey: 'input_tokens', header: '输入 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
+  { accessorKey: 'output_tokens', header: '输出 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
+  { accessorKey: 'total_tokens', header: '总 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
+  { accessorKey: 'cost', header: '费用', cell: ({ getValue }) => '$' + getValue<number>().toFixed(5) },
+  {
+    accessorKey: 'latency_ms',
+    header: '延迟',
+    cell: ({ getValue }) => {
+      const v = getValue<number | null>()
+      return v != null ? v + 'ms' : '-'
+    },
+  },
+]
+
+export function RequestsTable() {
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'created_at', desc: true }])
+  const [statusFilter, setStatusFilter] = useState('全部')
+
+  const { data: rows = [], isLoading } = useQuery<RequestRow[]>({
+    queryKey: ['requests'],
+    queryFn: () => api.get('/stats/requests').then((r) => r.data),
+  })
+
+  const filteredData = statusFilter === '全部' ? rows : rows.filter((r) => r.status === statusFilter)
+
+  const table = useReactTable({
+    data: filteredData,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: { pagination: { pageSize: 20 } },
+  })
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Status filter */}
+      <div className="flex flex-wrap items-center gap-2">
+        {STATUSES.map((s) => (
+          <Badge
+            key={s}
+            variant={statusFilter === s ? 'default' : 'outline'}
+            className="cursor-pointer select-none"
+            onClick={() => setStatusFilter(s)}
+          >
+            {s}
+          </Badge>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <Skeleton className="h-48 w-full" />
+      ) : (
+        <>
+          <div className="overflow-hidden rounded-md border">
+            <Table>
+              <TableHeader>
+                {table.getHeaderGroups().map((hg) => (
+                  <TableRow key={hg.id}>
+                    {hg.headers.map((header) => (
+                      <TableHead
+                        key={header.id}
+                        className="cursor-pointer select-none whitespace-nowrap text-xs"
+                        onClick={header.column.getToggleSortingHandler()}
+                      >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.column.getIsSorted() === 'asc' ? ' ↑' : header.column.getIsSorted() === 'desc' ? ' ↓' : ''}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id} className="text-xs">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground text-sm">
+                      暂无请求记录
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">共 {filteredData.length} 条</p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.previousPage()}
+                disabled={!table.getCanPreviousPage()}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-sm">
+                {table.getState().pagination.pageIndex + 1} / {Math.max(table.getPageCount(), 1)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => table.nextPage()}
+                disabled={!table.getCanNextPage()}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
