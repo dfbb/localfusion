@@ -318,6 +318,12 @@ pub struct ModelUsage {
     pub output_tokens: u64,
     pub cost: f64,               // 据 prices 估算；缺价格记 0
     pub status: CallStatus,      // Ok | Failed
+    /// true = token 数为本地估算(上游未返回 usage), false = 上游真实给出。
+    /// 影响统计可信度展示; estimated 的 cost 也按估算 token 计算。
+    pub estimated: bool,
+    /// 本次调用墙钟耗时(秒)。speed 策略据此与 output_tokens 算 throughput;
+    /// playground calls 也展示它。失败调用记录到失败为止的耗时。
+    pub latency_secs: f64,
 }
 
 pub enum CallRole { Member, Judge, Tool }
@@ -507,15 +513,21 @@ pub enum StrategyOutput {
 > - **每次非流式底层调用**（`MemberHandle` 的 `complete`）完成时——无论成功还是失败——
 >   策略（或 MemberHandle 的包装）向 `recorder.record(..)` 推一条 `ModelUsage`
 >   （失败的 `status=Failed`，token/cost 据实，多为 0）。
+> - **每次流式尝试在 `Started` 之前失败**（`MemberHandle` 的 `stream()` 直接返回
+>   `Err`，即建连/状态码/首事件失败）也必须 `recorder.record(..)` 推一条
+>   `status=Failed` 的 `ModelUsage`。这覆盖**流式 failover 的前置失败尝试**——它跳过
+>   失败成员去试下一个，每个失败成员都留一条记录，不漏统计。
 > - **编排层**（Router 之上、出口层）在策略返回后，**无论 `Ok` 还是 `Err` 都调
->   `recorder.drain()`** 取走全部已发生的非流式调用，写入 usage_hourly（§8）。因此
+>   `recorder.drain()`** 取走全部已发生的调用，写入 usage_hourly（§8）。因此
 >   `Err(FusionError)` 场景的已付费调用也被统计。
-> - **流式尾调用**：返回 `Stream` 时，最终生效那次调用的用量随流的 `Done` 事件晚到
->   （见 §6.1），由出口层在流关闭后追加；流中途 `Error` 终止时出口层补记一条 `Failed`。
->   即 recorder 收集"流之前已完成的非流式调用"，Done/Error 补"流式那一次"。
+> - **流式尾调用**：返回 `Stream` 时，最终**成功 `Started`** 那次调用的用量随流的
+>   `Done` 事件晚到（见 §6.1），由出口层在流关闭后追加；流中途 `Error` 终止时出口层补记
+>   一条 `Failed`。即 recorder 收集"所有非流式调用 + 流式 Started 前失败的尝试"，
+>   Done/Error 只补"最终那条成功建立的流"。三者无重叠：失败的流式尝试进 recorder，
+>   成功建立的流只通过 Done/Error 记一次。
 > - `UnifiedResponse.calls` 仅作为成功响应自身的视图（便于 playground 直接展示）；
->   **统计以 recorder.drain() + 流式 Done 为准**，二者对成功的非流式调用内容一致，不重复
->   写入（出口层去重：Full 路径只用 recorder，不再额外读 `UnifiedResponse.calls`）。
+>   **统计以 `recorder.drain()` + 流式 `Done`/`Error` 为准**，Full 路径只用 recorder，
+>   不再额外读 `UnifiedResponse.calls`（避免重复写入）。
 
 > **模型 id 解析（解决 judge / 工具路由的引用）**：`members` 只含虚拟模型显式配置的
 > 成员，而 `params.judge`（synthesize/best-of-n）与 multimodal 的能力路由表引用的
@@ -570,9 +582,11 @@ pub enum StrategyOutput {
 ### 7.1 failover（故障转移）— 单模型, 真流式
 - 按 members position 顺序逐个尝试，第一个成功即返回。
 - 失败判定：连接错误 / 5xx / 超时（params `timeout_secs`）。失败记 error 日志，下一个。
+- **每个失败的尝试都向 `recorder.record()` 推一条 `status=Failed` 的 `ModelUsage`**
+  （流式尝试在 `Started` 前失败同样记，见 §6.3），保证失败尝试进统计。
 - 全部失败 → 返回最后一个错误。
-- 流式边界：**只在「建连 + 首个事件成功」之前可故障转移**；首个事件之后中断直接报错
-  （token 已发给客户端，无法回退）。
+- 流式边界：**只在「建连 + 首个事件（`Started`）成功」之前可故障转移**；`Started` 之后
+  中断直接报错（token 已发给客户端，无法回退）。
 
 ### 7.2 speed（最快）— 单模型, 真流式
 - 查 latency_samples：每个 member 取最近 10 条 `AVG(throughput)`，选最高者单模型调用。
@@ -618,19 +632,29 @@ pub enum StrategyOutput {
 `request_log` 保留逐条明细（playground/排错）；**累计历史用 `usage_hourly` 预聚合**，
 避免每次展示扫全表。
 
-每次请求结束，出口层从 `UnifiedResponse.calls`（流式则从流结束时收集的 `ModelUsage`
-列表）读取用量明细，对当前整点 `hour_ts` 做原子 upsert，写三个维度：
+每次请求结束，出口层汇总该请求的**全部底层调用用量**——来源是
+`recorder.drain()`（所有非流式调用，含失败）**加上**流式那一次的尾用量
+（`UnifiedStream` 的 `Done.usage`，或中途 `Error` 补记的一条 `Failed`）。这份合并后的
+`Vec<ModelUsage>`（记作 `all_calls`）是统计的唯一权威来源，不读 `UnifiedResponse.calls`
+（后者仅作成功响应自身视图，见 §6.3）。对当前整点 `hour_ts` 做原子 upsert，写三个维度：
 
-- `scope='real'`：遍历 `calls`，每条 `ModelUsage` 按其 `model_id` 累加一行——
-  累加该条的 token/cost；`requests` **按底层调用计数**（每条 calls +1）；失败调用
-  累加 `errors`。
-- `scope='virtual'`：该**虚拟模型名**累加一行，token/cost 用 `UnifiedResponse.usage`
-  合计；`requests` **按对外请求计数**（每个外部请求恰好 +1）；本次请求整体失败才
-  `errors` +1。
+- `scope='real'`：遍历 `all_calls`，每条 `ModelUsage` 按其 `model_id` 累加一行——
+  累加该条的 token/cost；`requests` **按底层调用计数**（每条 +1）；`status=Failed` 的
+  调用累加 `errors`。
+- `scope='virtual'`：该**虚拟模型名**累加一行，token/cost 用 `all_calls` 的合计
+  （= 各条之和，**不依赖 `UnifiedResponse`**，故错误路径无响应体时同样可累计）；
+  `requests` **按对外请求计数**（每个外部请求恰好 +1）；本次请求整体失败（策略返回
+  `Err`，或流式以 `Error` 终止）才 `errors` +1。
 - `scope='total'`：全局累加一行（name 留空），口径同 virtual（按对外请求计数）。
 
+> **错误路径累计**：策略返回 `Err(FusionError)` 时没有 `UnifiedResponse`，但
+> `recorder.drain()` 仍持有已发生的失败/成功调用，`all_calls` 据此构造；virtual/total
+> 的 token/cost 用 `all_calls` 合计（可能全为 0），`requests` 照常 +1、`errors` +1。
+> 因此「全部 member 失败」「judge 失败」「流式 failover 全部 Started 前失败」等场景都被
+> 计入，不会丢请求计数。
+
 **口径说明（重要）**：
-- **token / cost**：`real` 各行之和 == `virtual` == `total` 的增量（同一份 `calls`
+- **token / cost**：`real` 各行之和 == `virtual` == `total` 的增量（同一份 `all_calls`
   的不同聚合视角，恒等）。
 - **requests**：口径**不同且不可比**——`real.requests` 是底层供应商调用次数（panel/
   multimodal 一个对外请求会产生多次底层调用，故 `real.requests` 之和 ≥
@@ -925,12 +949,12 @@ navGroups）：
     "final": "最终回答文本",
     "strategy": "synthesize",
     "status": "full|degraded|stop|ok",
-    "calls": [ { "model_id","role","input_tokens","output_tokens","cost","status","latency_secs" } ],
+    "calls": [ { "model_id","role","input_tokens","output_tokens","cost","status","estimated","latency_secs" } ],
     "detail": { /* StrategyTrace 序列化, 字段随策略而异, 见下 */ }
   }
   ```
-  - `calls` 来自 `recorder.drain()`（含失败调用），对齐 §6.1 的 `ModelUsage` 并额外带
-    `latency_secs` 供展示。
+  - `calls` 来自合并后的 `all_calls`（`recorder.drain()` + 流式尾用量，含失败调用），
+    每条即 §6.1 的 `ModelUsage` 序列化（含 `estimated` / `latency_secs` 字段）。
   - `detail` 来自 §6.3 的 `StrategyTrace`：panel 类含 `member_answers[] + judge{input,
     output} + status`；failover 含 `attempts[]`（尝试链）；speed/cheapest 含
     `candidates[]`（候选指标对比）；multimodal 含 `turns[]`（时间线）。
