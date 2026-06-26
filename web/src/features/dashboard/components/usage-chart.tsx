@@ -52,7 +52,7 @@ interface Props {
 
 export function UsageChart({ range }: Props) {
   const { data: rows = [], isLoading } = useQuery<UsageRow[]>({
-    queryKey: ['usage', range.from, range.to],
+    queryKey: ['usage', range.from, range.to, range.granularity],
     queryFn: () =>
       api
         .get('/stats/usage', { params: { scope: 'total', from: range.from, to: range.to } })
