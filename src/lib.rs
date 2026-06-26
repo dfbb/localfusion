@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod auth;
+pub mod bootstrap;
 pub mod connector;
 pub mod crypto;
 pub mod db;

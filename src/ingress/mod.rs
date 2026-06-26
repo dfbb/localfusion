@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod handler;
 pub mod openai_chat;
 pub mod openai_responses;
 pub mod sse_out;
