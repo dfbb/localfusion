@@ -332,23 +332,26 @@ pub enum CallStatus { Ok, Failed }
 /// 统一响应。策略产出它, 出口翻译回目标协议。
 pub struct UnifiedResponse {
     pub items: Vec<Item>,        // 通常是 assistant Message, 可能含 ToolCall
-    /// 对外暴露的合计用量（virtual 维度统计与客户端 usage 字段用）。
+    /// 对外暴露的合计用量（客户端 usage 字段用；= 本次成功响应各底层调用之和）。
     pub usage: Usage,
     /// 实际生效的真实模型（panel 类=judge, 单模型类=被选中者）。
     pub model_id: String,
-    /// 本次请求所有底层调用的逐条用量明细。
-    /// usage_hourly 的 scope='real' 维度按 calls 逐条累计，
-    /// scope='virtual'/'total' 按 usage 合计累计（见 §8）。
+    /// 本次成功响应包含的底层调用逐条明细，仅作**响应自身视图**
+    /// （便于 playground 直接展示）。**不作为 §8 统计来源**——统计统一走
+    /// CallRecorder + 流式 Done/Error（见下「用量统计契约」与 §6.3、§8）。
     pub calls: Vec<ModelUsage>,
 }
 ```
 
-> **用量统计契约**：`calls` 是支撑 §8 三维度累计的关键。Connector 的
-> `complete`/`stream` 每完成一次底层供应商调用，填一条 `ModelUsage`；策略把各成员
-> 与 judge 的调用合并进 `calls`，并把合计填入 `usage`。failover/speed/cheapest 等
-> 单模型策略产出单条 `calls`；synthesize/best-of-n 产出 N 个成员 + 1 个 judge；
-> multimodal 产出主模型多轮 + 各工具回合，role 分别标 Member/Tool。失败的成员调用
-> 也记一条 `status=Failed`（cost/token 据实，多为 0），供 errors 维度统计。
+> **用量统计契约（单一权威）**：§8 的累计**只**来自 `CallRecorder.drain()`（所有非流式
+> 调用 + 流式 `Started` 前失败的尝试）加上流式尾用量（`UnifiedStream` 的 `Done`/
+> `Error`）。`UnifiedResponse.calls` / `UnifiedResponse.usage` **不参与统计**，只作客户端
+> 响应体与 playground 展示之用，避免与 recorder 重复计数。
+>
+> 各策略向 recorder 推送的形态：failover/speed/cheapest 推选中那条（+ 失败尝试若干）；
+> synthesize/best-of-n 推 N 个成员 + 1 个 judge（含失败成员）；multimodal 推主模型多轮
+> + 各工具回合，`role` 分别标 Member/Judge/Tool。失败调用 `status=Failed`（cost/token
+> 据实，多为 0），供 errors 维度统计。详见 §6.3「调用记录器」。
 
 #### UnifiedStream 事件模型
 
@@ -373,10 +376,15 @@ pub enum UnifiedStreamEvent {
     ReasoningDelta { text: String },
     /// 工具调用增量/完成 (multimodal 据此拦截; 含 id/name/args 累积)。
     ToolCall { id: String, name: String, args: serde_json::Value },
-    /// 正常结束。携带本次调用的最终用量, 出口层据此写 usage_hourly (§8)。
-    Done { usage: ModelUsage, finish_reason: Option<String> },
-    /// 流中途错误 (已开始吐 token 后上游中断等)。
-    Error { message: String },
+    /// 正常结束。
+    /// - `usage`: 面向客户端 SSE 的**合计用量**(放进最终 SSE 的 usage 字段)。
+    ///   真流(单连接器)时 = 该次调用; 伪流(panel)时 = 整个响应的合计。
+    /// - `call`: 本条流对应的**那一次真实底层调用**的 ModelUsage, 供 §8 统计。
+    ///   真流时 = Some(该次调用); 伪流(panel Full)时 = None
+    ///   (成员/judge 调用已由 CallRecorder 记账, 避免重复统计)。
+    Done { usage: Usage, call: Option<ModelUsage>, finish_reason: Option<String> },
+    /// 流中途错误 (已 Started 之后上游中断等)。携带本条流那次调用的失败明细。
+    Error { message: String, call: Option<ModelUsage> },
 }
 ```
 
@@ -384,18 +392,23 @@ pub enum UnifiedStreamEvent {
 
 - **顺序**：`Started` 必为首事件；随后任意多个 `*Delta` / `ToolCall`；以恰好一个
   `Done` **或** `Error` 终止流，终止后 channel 关闭。
-- **usage 传递**：仅 `Done` 携带 `ModelUsage`（从供应商 SSE 的 usage 事件解析；若上游
-  不给 usage，则按已累计产出 token 估算并标注 `estimated`）。出口层在转发流给客户端
-  的同时缓存这条 usage，流关闭后写入 usage_hourly。`Error` 终止时也补记一条
-  `status=Failed` 的用量（token/cost 据实，多为 0）。
+- **两种 usage 分离**：`Done.usage`（合计 `Usage`）只用于填客户端 SSE 的 usage 字段；
+  `Done.call`（单条 `ModelUsage`，`Option`）才是 §8 统计输入。真流时二者同源
+  （`call=Some`，`usage` 即该调用合计）；**panel 伪流时 `call=None`**——其成员/judge 都是
+  `complete()` 非流式调用，已进 CallRecorder，伪流只负责把合计 `usage` 透给客户端，不再
+  重复贡献统计。
+- **estimated**：`call` 的 `ModelUsage.estimated` 标识 token 是否本地估算（上游 SSE 未给
+  usage 时按已产出 token 估算）。
 - **错误语义**：建连/状态码失败发生在产出流**之前**，直接返回 `Err(ConnError)`（不进
-  流）；`Error` 事件专指「已 `Started` 之后」的中途失败。failover 因此只能在收到
-  `Started` 前切换（§7.1）。
-- **speed 度量**：`Done.usage` 含 output_tokens；出口层结合从 `Started` 到 `Done` 的
-  耗时算出 throughput，写 latency_samples（§7.2）。
+  流，由策略向 recorder 记一条 Failed，见 §6.3）；`Error` 事件专指「已 `Started` 之后」
+  的中途失败，其 `call=Some(Failed)` 由出口层写统计。failover 只能在 `Started` 前切换
+  （§7.1）。
+- **speed 度量**：`Done.call` 含 output_tokens 与 latency_secs，throughput =
+  output_tokens / latency_secs，写 latency_samples（§7.2）。
 - **伪流**：panel 类策略返回 `Full`，出口层把 `UnifiedResponse` 切成一串
-  `UnifiedStreamEvent`（`Started` → 若干 `TextDelta` → `Done`）再按目标协议 SSE 输出，
-  与真流共用同一套「Unified 事件 → 协议 SSE」翻译器。
+  `UnifiedStreamEvent`（`Started` → 若干 `TextDelta` → `Done{ usage: 响应合计,
+  call: None }`）再按目标协议 SSE 输出，与真流共用同一套「Unified 事件 → 协议 SSE」
+  翻译器。
 
 ### 6.2 Connector trait（出口适配器）
 
@@ -616,14 +629,22 @@ pub enum StrategyOutput {
 ### 7.6 multimodal（主模型 + 工具拦截回填）— agentic loop
 - members[0] 是主推理模型；params 是能力路由表
   `{web_search: model_id, image_generation: model_id, tool_search:..., image_query:...}`。
-- 循环：
-  1. 调主模型（带 tools 定义）。
+- 循环（agentic loop，全程 `complete` 非流式，每轮入 recorder）：
+  1. 调主模型（带 tools 定义，非流式 `complete`）。
   2. 返回含 ToolCall → 按能力路由表转发到专门后端执行 → 拿 ToolResult。
   3. ToolResult 追加为新 Item，回步骤 1。
-  4. 主模型不再发工具调用 → 结束返回最终回答。
+  4. 主模型某轮**不再发 ToolCall** → 该轮即终结轮。
 - 安全：工具回合后端只做受限能力，不暴露任意 bash/edit（参考 OpenPrism judge 隔离）。
 - `max_iterations` 防死循环（params 可配，默认 6）。
-- 流式：中间工具回合静默不吐，最后一轮主模型回答可真流。
+- **流式语义（修正）**：带 tools 时无法在产出前预知某轮是否会发 ToolCall，故
+  「最后一轮直接真流」不成立。采用两种确定性方案，由 params `stream_mode` 选择：
+  - `buffered`（默认）：整个 loop 全程非流式 `complete`；得到终结轮的完整回答后，出口层
+    把它切成伪流 SSE 发给客户端（同 panel 伪流，`Done.call=None`，各轮已入 recorder）。
+  - `final_reflow`：loop 全程非流式直到确定终结轮（已无 ToolCall）；随后**对最终上下文
+    禁用 tools 再发一次流式请求**（保证这一次不可能产生 ToolCall），真流给客户端。这次
+    真流是一次额外的底层调用，照常以 `Done.call=Some(..)` 入统计。
+  二者都不依赖「猜测某轮是否产生工具调用」，逻辑上成立。`final_reflow` 多一次调用换取
+  真实首字延迟，`buffered` 省调用但首字延迟等于整个 loop。
 
 ---
 
@@ -633,8 +654,9 @@ pub enum StrategyOutput {
 避免每次展示扫全表。
 
 每次请求结束，出口层汇总该请求的**全部底层调用用量**——来源是
-`recorder.drain()`（所有非流式调用，含失败）**加上**流式那一次的尾用量
-（`UnifiedStream` 的 `Done.usage`，或中途 `Error` 补记的一条 `Failed`）。这份合并后的
+`recorder.drain()`（所有非流式调用，含失败）**加上**真流那一次的尾用量
+（`UnifiedStream` 的 `Done.call`，或中途 `Error` 的 `call`；`call=None` 的伪流不贡献，
+因其成员调用已在 recorder 中）。这份合并后的
 `Vec<ModelUsage>`（记作 `all_calls`）是统计的唯一权威来源，不读 `UnifiedResponse.calls`
 （后者仅作成功响应自身视图，见 §6.3）。对当前整点 `hour_ts` 做原子 upsert，写三个维度：
 
@@ -895,7 +917,8 @@ navGroups）：
     - `speed`：`explore`（Switch，是否给无样本模型机会）、探测间隔（数字，分钟）
     - `cheapest`：`tokenizer`（Select：approx | tiktoken）、输出估算上限（数字）
     - `multimodal`：能力路由表——`web_search` / `image_generation` / `tool_search` /
-      `image_query` 各一个真实模型 Select（可留空 = 不支持该能力）、`max_iterations`（数字）
+      `image_query` 各一个真实模型 Select（可留空 = 不支持该能力）、`max_iterations`
+      （数字）、`stream_mode`（Select：buffered | final_reflow，见 §7.6）
   - 提交 → `POST/PUT /admin/api/virtual-models`，body 含 strategy + params(JSON) +
     members(有序数组)。
 - 删除同 13.2.1 模式。
