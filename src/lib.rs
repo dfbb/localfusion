@@ -2,6 +2,7 @@ pub mod connector;
 pub mod crypto;
 pub mod db;
 pub mod error;
+pub mod ingress;
 pub mod logging;
 pub mod router;
 pub mod strategy;
