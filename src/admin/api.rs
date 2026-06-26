@@ -600,6 +600,11 @@ async fn playground_handler(
         stream: false,
         raw_extra: serde_json::Value::Null,
     };
+    let strategy_name = match s.db.vmodel_get(&virtual_name).await {
+        Ok(Some(vm)) => vm.strategy,
+        Ok(None) => return err_json(StatusCode::NOT_FOUND, "unknown virtual model"),
+        Err(e) => return err_response(e),
+    };
     let router = crate::router::Router::new(s.db.clone(), s.enc_key);
     let recorder = crate::unified::CallRecorder::default();
     let trace = crate::unified::StrategyTrace::default();
@@ -627,6 +632,7 @@ async fn playground_handler(
             let calls = recorder.drain();
             Json(serde_json::json!({
                 "final": text,
+                "strategy": strategy_name,
                 "calls": calls,
                 "detail": trace.snapshot(),
             }))
@@ -637,6 +643,7 @@ async fn playground_handler(
             let calls = recorder.drain();
             Json(serde_json::json!({
                 "error": e.to_string(),
+                "strategy": strategy_name,
                 "calls": calls,
                 "detail": trace.snapshot(),
             }))
