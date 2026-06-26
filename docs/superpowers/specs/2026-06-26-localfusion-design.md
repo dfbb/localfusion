@@ -348,10 +348,16 @@ pub struct UnifiedResponse {
 > `Error`）。`UnifiedResponse.calls` / `UnifiedResponse.usage` **不参与统计**，只作客户端
 > 响应体与 playground 展示之用，避免与 recorder 重复计数。
 >
-> 各策略向 recorder 推送的形态：failover/speed/cheapest 推选中那条（+ 失败尝试若干）；
-> synthesize/best-of-n 推 N 个成员 + 1 个 judge（含失败成员）；multimodal 推主模型多轮
-> + 各工具回合，`role` 分别标 Member/Judge/Tool。失败调用 `status=Failed`（cost/token
-> 据实，多为 0），供 errors 维度统计。详见 §6.3「调用记录器」。
+> 各策略向 recorder 推送的形态：
+> - **failover/speed/cheapest**：失败尝试始终入 recorder；**选中那条**仅在
+>   `want_stream=false`（走 `complete()`）时入 recorder，`want_stream=true`（走
+>   `stream()` 返回真流）时**不入 recorder**，其用量随流的 `Done.call`/`Error.call` 在
+>   流结束后落库（见 §6.3 写入时机）。
+> - **synthesize/best-of-n**：N 个成员 + 1 个 judge 全是 `complete()`，全部入 recorder
+>   （含失败成员）。
+> - **multimodal**：主模型多轮 + 各工具回合全是 `complete()`，全部入 recorder，`role`
+>   分别标 Member/Judge/Tool。
+> 失败调用 `status=Failed`（cost/token 据实，多为 0），供 errors 维度统计。详见 §6.3。
 
 #### UnifiedStream 事件模型
 
@@ -479,8 +485,8 @@ pub struct StrategyCtx<'a> {
     pub params: serde_json::Value,       // 该虚拟模型的策略私有参数
     pub db: &'a Db,                      // speed/cheapest 查延迟/价格表
     pub want_stream: bool,
-    /// 调用记录器: 每次非流式底层调用(成功/失败)都推一条 ModelUsage。
-    /// 编排层在策略返回后(Ok/Err 均) drain 写统计。见下文「调用记录器」。
+    /// 调用记录器: 非流式底层调用与流式前置失败尝试推 ModelUsage。
+    /// 出口层按 Full/Stream 两种时机 drain 并写统计(见「调用记录器」写入时机)。
     pub recorder: &'a CallRecorder,
     /// 调试 trace: 仅 playground 请求时为 Some(正常推理入口为 None)。
     /// 策略把成员答案/judge 输入输出/候选对比/尝试链/时间线写入它, 供 §13.2.6 还原。
