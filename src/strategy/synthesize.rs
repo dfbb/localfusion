@@ -46,7 +46,7 @@ pub(crate) fn answer_text_pub(r: &UnifiedResponse) -> String {
 }
 
 /// 从请求中提取用户问题文本（用于拼合成 prompt）
-pub(super) fn question_text(req: &UnifiedRequest) -> String {
+pub(crate) fn question_text(req: &UnifiedRequest) -> String {
     req.items
         .iter()
         .filter_map(|i| match i {
@@ -69,7 +69,7 @@ pub(super) fn question_text(req: &UnifiedRequest) -> String {
 }
 
 /// 构造一个只含单条用户消息的文本请求（给 judge 调用）
-pub(super) fn make_text_request(prompt: &str, max_tokens: Option<u32>) -> UnifiedRequest {
+pub(crate) fn make_text_request(prompt: &str, max_tokens: Option<u32>) -> UnifiedRequest {
     UnifiedRequest {
         items: vec![Item::Message {
             role: Role::User,
