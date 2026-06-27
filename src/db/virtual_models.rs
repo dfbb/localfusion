@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::error::FusionError;
 
-/// 虚拟模型表行结构体。
+/// Row struct for the virtual models table.
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct VirtualModelRow {
     pub name: String,
@@ -9,7 +9,7 @@ pub struct VirtualModelRow {
     pub params: String,
 }
 
-/// 模型引用：记录某个模型被引用的虚拟模型名和引用方式（member/judge/web_search 等）。
+/// Model reference: records the virtual model name and reference kind (member/judge/web_search, etc.) for a given model.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelRef {
     pub virtual_name: String,
@@ -17,14 +17,14 @@ pub struct ModelRef {
 }
 
 impl Db {
-    /// 列出所有虚拟模型（按 name 排序）。
+    /// List all virtual models (sorted by name).
     pub async fn vmodel_list(&self) -> Result<Vec<VirtualModelRow>, FusionError> {
         Ok(sqlx::query_as::<_, VirtualModelRow>("SELECT * FROM virtual_models ORDER BY name")
             .fetch_all(&self.pool)
             .await?)
     }
 
-    /// 按 name 获取单个虚拟模型；不存在时返回 None。
+    /// Get a single virtual model by name; returns None if it does not exist.
     pub async fn vmodel_get(&self, name: &str) -> Result<Option<VirtualModelRow>, FusionError> {
         Ok(sqlx::query_as::<_, VirtualModelRow>("SELECT * FROM virtual_models WHERE name = ?")
             .bind(name)
@@ -32,7 +32,7 @@ impl Db {
             .await?)
     }
 
-    /// 获取虚拟模型的成员模型列表（按 position 排序）。
+    /// Get the list of member models for a virtual model (sorted by position).
     pub async fn vmodel_members(&self, name: &str) -> Result<Vec<String>, FusionError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT model_id FROM virtual_model_members WHERE virtual_name = ? ORDER BY position",
@@ -43,10 +43,10 @@ impl Db {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// Upsert 虚拟模型及其成员列表（事务执行）。
-    /// - 先 insert or update 虚拟模型行
-    /// - 清空原成员列表
-    /// - 按 members 顺序重新插入，position 从 0 开始
+    /// Upsert a virtual model and its member list (executed in a transaction).
+    /// - First insert or update the virtual model row
+    /// - Clear the existing member list
+    /// - Re-insert members in order from the members slice, with position starting at 0
     pub async fn vmodel_upsert(
         &self,
         row: &VirtualModelRow,
@@ -80,7 +80,7 @@ impl Db {
         Ok(())
     }
 
-    /// 删除虚拟模型（成员会级联删除，因为 foreign key 配置了 ON DELETE CASCADE）。
+    /// Delete a virtual model (members are cascade-deleted because the foreign key is configured with ON DELETE CASCADE).
     pub async fn vmodel_delete(&self, name: &str) -> Result<(), FusionError> {
         sqlx::query("DELETE FROM virtual_models WHERE name = ?")
             .bind(name)
@@ -89,12 +89,12 @@ impl Db {
         Ok(())
     }
 
-    /// 查找某个模型的所有引用。
-    /// 返回该模型被引用的虚拟模型名 + 引用类型（member/judge/web_search/image_generation/tool_search/image_query）。
+    /// Find all references to a given model.
+    /// Returns the virtual model names that reference this model and the reference kind (member/judge/web_search/image_generation/tool_search/image_query).
     pub async fn model_references(&self, model_id: &str) -> Result<Vec<ModelRef>, FusionError> {
         let mut refs = Vec::new();
 
-        // 查找该模型作为 member 出现的虚拟模型
+        // Find virtual models where this model appears as a member
         let member_of: Vec<(String,)> = sqlx::query_as(
             "SELECT virtual_name FROM virtual_model_members WHERE model_id = ?",
         )
@@ -108,7 +108,7 @@ impl Db {
             });
         }
 
-        // 查找该模型在 params JSON 中作为 route key 出现的虚拟模型
+        // Find virtual models where this model appears as a route key in the params JSON
         const ROUTE_KEYS: [&str; 5] = ["judge", "web_search", "image_generation", "tool_search", "image_query"];
         for vm in self.vmodel_list().await? {
             let params: serde_json::Value =
@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::db::models::ModelRow;
 
-    /// 辅助函数：创建一个模型并插入数据库。
+    /// Helper function: create a model and insert it into the database.
     async fn seed_model(db: &Db, id: &str) {
         db.model_upsert(&ModelRow {
             id: id.into(),

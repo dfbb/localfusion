@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
-// ── 请求 ─────────────────────────────────────────────────────────────────────
+// ── Request ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedRequest {
@@ -14,7 +14,7 @@ pub struct UnifiedRequest {
     pub raw_extra: serde_json::Value,
 }
 
-// ── 会话条目 ──────────────────────────────────────────────────────────────────
+// ── Conversation Items ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -36,7 +36,7 @@ pub enum ContentBlock {
     Image { url: String },
 }
 
-// ── 工具定义 ──────────────────────────────────────────────────────────────────
+// ── Tool Definitions ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -46,7 +46,7 @@ pub struct ToolDef {
     #[serde(default)] pub builtin: Option<String>,
 }
 
-// ── 用量 ──────────────────────────────────────────────────────────────────────
+// ── Usage ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Usage {
@@ -54,7 +54,7 @@ pub struct Usage {
     pub output_tokens: u64,
 }
 
-// ── 调用元数据 ────────────────────────────────────────────────────────────────
+// ── Call Metadata ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -76,7 +76,7 @@ pub struct ModelUsage {
     pub latency_secs: f64,
 }
 
-// ── 响应 ──────────────────────────────────────────────────────────────────────
+// ── Response ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedResponse {
@@ -86,7 +86,7 @@ pub struct UnifiedResponse {
     pub calls: Vec<ModelUsage>,
 }
 
-// ── 流式事件 ──────────────────────────────────────────────────────────────────
+// ── Stream Events ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -99,20 +99,20 @@ pub enum UnifiedStreamEvent {
     Error { message: String, call: Option<ModelUsage> },
 }
 
-/// 流式响应句柄；rx 由 connector 写入，消费方逐事件读取
+/// Streaming response handle; rx is written by the connector, consumer reads event by event
 pub struct UnifiedStream {
     pub rx: tokio::sync::mpsc::Receiver<Result<UnifiedStreamEvent, ConnError>>,
     pub upstream_request_id: Option<String>,
 }
 
-// ── 连接器错误 ────────────────────────────────────────────────────────────────
+// ── Connector Error ───────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnError {
-    /// 连接器不支持该操作，不可重试
+    /// Connector does not support this operation; not retryable
     #[error("connector unsupported: {0}")]
     HardFail(String),
-    /// 上游 HTTP 错误，可能可重试
+    /// Upstream HTTP error; may be retryable
     #[error("connector http: {0}")]
     Http(String),
 }
@@ -128,18 +128,18 @@ impl From<ConnError> for crate::error::FusionError {
 
 // ── CallRecorder ──────────────────────────────────────────────────────────────
 
-/// 线程安全的调用记录收集器；drain() 是唯一统计权威
+/// Thread-safe call record collector; drain() is the sole authoritative statistics source
 #[derive(Default)]
 pub struct CallRecorder {
     calls: Mutex<Vec<ModelUsage>>,
 }
 
 impl CallRecorder {
-    /// 记录一条调用元数据
+    /// Record one call metadata entry
     pub fn record(&self, usage: ModelUsage) {
         self.calls.lock().expect("recorder lock").push(usage);
     }
-    /// 取走并清空全部记录
+    /// Take and clear all records
     pub fn drain(&self) -> Vec<ModelUsage> {
         std::mem::take(&mut *self.calls.lock().expect("recorder lock"))
     }
@@ -157,7 +157,7 @@ struct TraceData {
     turns: Vec<serde_json::Value>,
 }
 
-/// 策略执行轨迹收集器，用于调试和可观测性
+/// Strategy execution trace collector, used for debugging and observability
 #[derive(Default)]
 pub struct StrategyTrace {
     data: Mutex<TraceData>,
@@ -190,7 +190,7 @@ impl StrategyTrace {
     pub fn add_turn(&self, turn: serde_json::Value) {
         self.data.lock().unwrap().turns.push(turn);
     }
-    /// 返回当前快照（JSON），不清空内部状态
+    /// Returns current snapshot (JSON) without clearing internal state
     pub fn snapshot(&self) -> serde_json::Value {
         let d = self.data.lock().unwrap();
         serde_json::json!({
@@ -204,7 +204,7 @@ impl StrategyTrace {
     }
 }
 
-// ── 测试 ──────────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

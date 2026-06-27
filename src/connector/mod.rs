@@ -10,7 +10,7 @@ use std::str::FromStr;
 use crate::db::models::ModelRow;
 use crate::unified::{ConnError, UnifiedRequest, UnifiedResponse, UnifiedStream};
 
-/// 连接器类型枚举
+/// Connector type enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectorKind {
     Chat,
@@ -30,16 +30,16 @@ impl FromStr for ConnectorKind {
     }
 }
 
-/// 鉴权方式枚举
+/// Authentication method enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthKind {
-    /// OpenAI 风格：Authorization: Bearer <key>
+    /// OpenAI style: Authorization: Bearer <key>
     Bearer,
-    /// Anthropic 风格：x-api-key: <key>
+    /// Anthropic style: x-api-key: <key>
     XApiKey,
 }
 
-/// 出口请求上下文，包含连接器发起请求所需的全部配置
+/// Egress request context containing all configuration needed for the connector to make requests
 pub struct EgressCtx {
     pub base_url: String,
     pub model: String,
@@ -50,7 +50,7 @@ pub struct EgressCtx {
     pub http: reqwest::Client,
 }
 
-/// 出口适配器 trait；每种 API 格式实现一次
+/// Egress adapter trait; implemented once per API format
 #[async_trait]
 pub trait Connector: Send + Sync {
     async fn complete(
@@ -66,7 +66,7 @@ pub trait Connector: Send + Sync {
     ) -> Result<UnifiedStream, ConnError>;
 }
 
-/// 根据 ConnectorKind 创建对应的 Connector 实例
+/// Create the corresponding Connector instance based on ConnectorKind
 pub fn make_connector(kind: ConnectorKind) -> Box<dyn Connector> {
     match kind {
         ConnectorKind::Chat => Box::new(chat::ChatConnector),
@@ -75,7 +75,7 @@ pub fn make_connector(kind: ConnectorKind) -> Box<dyn Connector> {
     }
 }
 
-/// 每种连接器对应的 API 路径后缀
+/// API path suffix for each connector type
 fn default_path(kind: ConnectorKind) -> &'static str {
     match kind {
         ConnectorKind::Chat => "/chat/completions",
@@ -84,12 +84,12 @@ fn default_path(kind: ConnectorKind) -> &'static str {
     }
 }
 
-/// 拼接出口 URL：base_url 去掉尾部斜杠后追加路径后缀
+/// Build egress URL: strip trailing slash from base_url then append the path suffix
 pub fn egress_url(base_url: &str, kind: ConnectorKind) -> String {
     format!("{}{}", base_url.trim_end_matches('/'), default_path(kind))
 }
 
-/// 构建请求头：包含鉴权头、Content-Type，以及 Anthropic 版本头（XApiKey 模式）
+/// Build request headers: includes auth header, Content-Type, and Anthropic version header (XApiKey mode)
 pub fn build_headers(
     auth: AuthKind,
     key: Option<&str>,
@@ -125,7 +125,7 @@ pub fn build_headers(
     Ok(h)
 }
 
-/// 解析 API key：优先使用加密存储的 api_key_enc，其次从环境变量读取
+/// Resolve API key: prefers the encrypted api_key_enc, falls back to reading from environment variable
 pub fn resolve_key(m: &ModelRow, enc_key: &[u8; 32]) -> Result<Option<String>, ConnError> {
     if let Some(enc) = &m.api_key_enc {
         let pt = crate::crypto::decrypt(enc_key, enc)
@@ -142,10 +142,11 @@ pub fn resolve_key(m: &ModelRow, enc_key: &[u8; 32]) -> Result<Option<String>, C
     Ok(None)
 }
 
-/// 上游 HTTP 错误的脱敏封装(设计 §5.3「供应商原始错误可截断脱敏」)。
+/// Sanitized wrapper for upstream HTTP errors (design §5.3 "vendor raw errors may be truncated and sanitized").
 ///
-/// 把上游响应体截断到至多 `MAX` 字符(按字符边界,UTF-8 安全),避免把供应商
-/// 内部细节/限流原文/潜在敏感片段原样透传给客户端。空体则省略冒号后内容。
+/// Truncates the upstream response body to at most `MAX` characters (on character boundaries, UTF-8 safe),
+/// preventing vendor internal details / rate-limit messages / potentially sensitive fragments from being
+/// forwarded verbatim to the client. An empty body omits everything after the colon.
 pub fn upstream_error(status: reqwest::StatusCode, body: &str) -> ConnError {
     const MAX: usize = 200;
     let trimmed = body.trim();
@@ -178,14 +179,14 @@ mod tests {
     #[test]
     fn upstream_error_truncates_and_handles_empty() {
         use reqwest::StatusCode;
-        // 长错误体被截断到 200 字符并加省略号，避免上游原文全量透传
+        // long error body is truncated to 200 characters with ellipsis, preventing full upstream text from being forwarded
         let long = "x".repeat(500);
         let e = upstream_error(StatusCode::BAD_GATEWAY, &long);
         let msg = e.to_string();
         assert!(msg.contains('…'));
-        // 截断后正文不超过 200 个 'x'
+        // truncated body contains no more than 200 'x' characters
         assert_eq!(msg.matches('x').count(), 200);
-        // 空体省略冒号后内容(仅保留 Display 前缀 "connector http:" 的那个冒号)
+        // empty body omits content after colon (only the colon from the Display prefix "connector http:" remains)
         let empty = upstream_error(StatusCode::INTERNAL_SERVER_ERROR, "   ");
         assert_eq!(empty.to_string().matches(':').count(), 1);
     }

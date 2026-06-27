@@ -1,8 +1,8 @@
-//! 鉴权模块
+//! Authentication module
 //!
-//! - `extract_bearer`：从请求头提取 Bearer token 或 x-api-key
-//! - `authorize_ingress`：校验 ingress key + ACL
-//! - `verify_admin`：校验 admin token（hash 比对）
+//! - `extract_bearer`: extract Bearer token or x-api-key from request headers
+//! - `authorize_ingress`: validate ingress key + ACL
+//! - `verify_admin`: validate admin token (hash comparison)
 
 use axum::http::HeaderMap;
 
@@ -10,9 +10,9 @@ use crate::crypto::sha256_hex;
 use crate::db::Db;
 use crate::error::FusionError;
 
-/// 从请求头提取明文 token。
+/// Extract plaintext token from request headers.
 ///
-/// 优先读取 `Authorization: Bearer <token>`，回退到 `x-api-key` 头。
+/// Prefers `Authorization: Bearer <token>`, falls back to the `x-api-key` header.
 pub fn extract_bearer(headers: &HeaderMap) -> Option<String> {
     if let Some(v) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(rest) = v.strip_prefix("Bearer ") {
@@ -25,10 +25,10 @@ pub fn extract_bearer(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// 校验 ingress 请求的 key 及 ACL。
+/// Validate the key and ACL for an ingress request.
 ///
-/// 1. 提取 Bearer token，缺失返回 401。
-/// 2. 调用 `Db::key_authorize`（内部对明文做 sha256），ACL 拒绝返回 401。
+/// 1. Extract the Bearer token; return 401 if missing.
+/// 2. Call `Db::key_authorize` (which sha256-hashes the plaintext internally); return 401 if ACL denies.
 pub async fn authorize_ingress(
     db: &Db,
     headers: &HeaderMap,
@@ -45,10 +45,10 @@ pub async fn authorize_ingress(
     }
 }
 
-/// 校验 admin token。
+/// Validate the admin token.
 ///
-/// `db_token_hash`：数据库中存储的 sha256_hex(admin_token)。
-/// 提取请求头 token 后做 sha256 比对，不匹配返回 401。
+/// `db_token_hash`: the sha256_hex(admin_token) stored in the database.
+/// Extracts the token from the request header, sha256-hashes it, and compares; returns 401 on mismatch.
 pub fn verify_admin(db_token_hash: &str, headers: &HeaderMap) -> Result<(), FusionError> {
     let token = extract_bearer(headers)
         .ok_or_else(|| FusionError::Unauthorized("missing admin token".into()))?;

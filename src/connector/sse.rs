@@ -1,5 +1,5 @@
-//! 通用 SSE 出口引擎
-//! 字节级 `\n\n` 帧分割（UTF-8 安全），data:/[DONE] 解析，先发 Started 再转发事件
+//! Generic SSE egress engine
+//! Byte-level `\n\n` frame splitting (UTF-8 safe), data:/[DONE] parsing, sends Started before forwarding events
 
 use futures::StreamExt;
 use reqwest::header::HeaderMap;
@@ -8,19 +8,19 @@ use tokio::sync::mpsc;
 
 use crate::unified::{ConnError, UnifiedStream, UnifiedStreamEvent};
 
-/// SSE 切帧缓冲上限(单帧未闭合时累积字节的硬上限)。
-/// 正常 SSE 单帧远小于此值;超限说明上游异常,触发受控失败而非内存无限增长。
+/// SSE frame-splitting buffer limit (hard cap on accumulated bytes when a frame is not yet closed).
+/// Normal SSE frames are well below this value; exceeding it indicates upstream anomaly, triggering controlled failure instead of unbounded memory growth.
 const MAX_FRAME_BUFFER: usize = 1024 * 1024;
 
-/// SSE 事件翻译器 trait
-/// push：处理一个 JSON 块，返回零或多个统一事件
-/// finish：流结束时产出最终事件（如 Done{usage, call, ...}）
-/// fail：流中途失败时产出据实统计（status=Failed），默认基于 finish() 的用量改判失败
+/// SSE event translator trait
+/// push: processes one JSON chunk, returns zero or more unified events
+/// finish: produces final events when the stream ends (e.g. Done{usage, call, ...})
+/// fail: produces actual-usage stats on mid-stream failure (status=Failed); defaults to repurposing finish() usage with Failed status
 pub trait SseTranslator: Send {
     fn push(&mut self, chunk: &Value) -> Result<Vec<UnifiedStreamEvent>, ConnError>;
     fn finish(&mut self) -> Vec<UnifiedStreamEvent>;
-    /// 流中途失败：取 finish() 已累计的据实用量，状态改为 Failed，
-    /// 返回供出口层落统计的 ModelUsage（已 Started 后失败也要记，见设计 §6.1）
+    /// Mid-stream failure: takes the actual usage accumulated by finish(), changes status to Failed,
+    /// returns ModelUsage for the egress layer to record stats (failures after Started must still be recorded, see design §6.1)
     fn fail(&mut self) -> Option<crate::unified::ModelUsage> {
         use crate::unified::CallStatus;
         for ev in self.finish() {
@@ -33,9 +33,9 @@ pub trait SseTranslator: Send {
     }
 }
 
-/// 在缓冲区中查找最早的 SSE 帧分隔位置，返回 (分隔起始下标, 分隔字节数)。
-/// 同时识别 `\n\n`(2 字节)与 `\r\n\r\n`(4 字节)；取最靠前者，
-/// 同位置优先按更长的 CRLF 分隔切分以免把 `\r` 残留进下一帧。
+/// Finds the earliest SSE frame boundary in the buffer, returning (boundary start index, separator byte count).
+/// Recognizes both `\n\n` (2 bytes) and `\r\n\r\n` (4 bytes); takes the earliest occurrence,
+/// preferring the longer CRLF separator at the same position to avoid leaving `\r` in the next frame.
 fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
     let lf = buf.windows(2).position(|w| w == b"\n\n");
     let crlf = buf.windows(4).position(|w| w == b"\r\n\r\n");
@@ -53,7 +53,7 @@ fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
     }
 }
 
-/// 同步发 POST + 状态码校验后 spawn 异步读取任务，返回 UnifiedStream
+/// Sends POST + validates status code synchronously, then spawns async read task, returns UnifiedStream
 pub async fn run_egress(
     url: String,
     headers: HeaderMap,
@@ -70,7 +70,7 @@ pub async fn run_egress(
         .await
         .map_err(|e| ConnError::Http(format!("request failed: {e}")))?;
 
-    // 提取上游请求 ID（可选）
+    // Extract upstream request ID (optional)
     let upstream_request_id = resp
         .headers()
         .get("x-request-id")
@@ -85,7 +85,7 @@ pub async fn run_egress(
 
     let (tx, rx) = mpsc::channel::<Result<UnifiedStreamEvent, ConnError>>(64);
 
-    // 先发送 Started 事件
+    // Send Started event first
     let _ = tx.send(Ok(UnifiedStreamEvent::Started { model_id })).await;
 
     let mut byte_stream = resp.bytes_stream();
@@ -110,7 +110,7 @@ pub async fn run_egress(
             };
             buf.extend_from_slice(&chunk);
 
-            // 缓冲上限保护:防止异常上游持续发送不含帧分隔符的字节导致 buf 无限增长
+            // Buffer size guard: prevents an abnormal upstream that continuously sends bytes without frame separators from growing buf unboundedly
             if buf.len() > MAX_FRAME_BUFFER {
                 let call = translator.fail();
                 let _ = tx
@@ -122,12 +122,12 @@ pub async fn run_egress(
                 return;
             }
 
-            // 字节级切帧：识别 \n\n 与 \r\n\r\n 两种 SSE 帧分隔(经 CRLF 代理时为后者)
+            // Byte-level frame splitting: recognizes both \n\n and \r\n\r\n SSE frame separators (the latter used when passing through a CRLF proxy)
             while let Some((pos, sep_len)) = find_frame_boundary(&buf) {
                 let frame = buf[..pos].to_vec();
                 buf.drain(..pos + sep_len);
 
-                // UTF-8 安全解码完整帧
+                // UTF-8 safe decode of complete frame
                 let block = match std::str::from_utf8(&frame) {
                     Ok(s) => s.to_string(),
                     Err(e) => {
@@ -197,7 +197,7 @@ pub async fn run_egress(
             }
         }
 
-        // 流结束，translator.finish() 负责产出 Done{usage, call, ...}
+        // Stream ended; translator.finish() is responsible for emitting Done{usage, call, ...}
         for ev in translator.finish() {
             if tx.send(Ok(ev)).await.is_err() {
                 return;
@@ -306,7 +306,7 @@ mod tests {
     async fn mid_stream_failure_emits_error_with_failed_call() {
         use crate::unified::CallStatus;
         let server = wiremock::MockServer::start().await;
-        // 第二帧触发 translator.push 失败（已 Started 并产出过 token）
+        // Second frame triggers translator.push failure (after Started and some tokens already emitted)
         let body = "data: {\"t\":\"hi\"}\n\ndata: {\"boom\":1}\n\n";
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .respond_with(
@@ -332,7 +332,7 @@ mod tests {
                 err_call = call;
             }
         }
-        // 中途失败必须产出 Error 事件，且携带 status=Failed 的据实用量（供统计）
+        // Mid-stream failure must emit an Error event carrying actual usage with status=Failed (for stats recording)
         let call = err_call.expect("expected Error event with call");
         assert_eq!(call.status, CallStatus::Failed);
     }
@@ -340,7 +340,7 @@ mod tests {
     #[tokio::test]
     async fn parses_crlf_frame_separators() {
         let server = wiremock::MockServer::start().await;
-        // 经 CRLF 代理后帧分隔为 \r\n\r\n
+        // Frame separator is \r\n\r\n after passing through a CRLF proxy
         let body = "data: {\"t\":\"你好\"}\r\n\r\ndata: {\"t\":\"世界\"}\r\n\r\ndata: [DONE]\r\n\r\n";
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .respond_with(

@@ -7,7 +7,7 @@ use crate::unified::*;
 
 pub struct Synthesize;
 
-/// 构建合成 prompt：把问题和各成员答案拼成让 judge 做综合的指令
+/// Build the synthesis prompt: concatenate the question and member answers into an instruction for the judge to synthesize
 pub(super) fn synthesis_prompt(question: &str, answers: &[(String, String)]) -> String {
     let mut p = format!("Question:\n{question}\n\nCandidate answers from different models:\n");
     for (i, (model, ans)) in answers.iter().enumerate() {
@@ -21,7 +21,7 @@ pub(super) fn synthesis_prompt(question: &str, answers: &[(String, String)]) -> 
     p
 }
 
-/// 从 UnifiedResponse 中提取纯文本内容
+/// Extract plain text content from a UnifiedResponse
 fn answer_text(resp: &UnifiedResponse) -> String {
     resp.items
         .iter()
@@ -40,12 +40,12 @@ fn answer_text(resp: &UnifiedResponse) -> String {
         .unwrap_or_default()
 }
 
-/// 公开给 best-of-n 和测试复用的文本提取函数
+/// Public text extraction function reused by best-of-n and tests
 pub(crate) fn answer_text_pub(r: &UnifiedResponse) -> String {
     answer_text(r)
 }
 
-/// 从请求中提取用户问题文本（用于拼合成 prompt）
+/// Extract the user question text from a request (used to build the synthesis prompt)
 pub(crate) fn question_text(req: &UnifiedRequest) -> String {
     req.items
         .iter()
@@ -68,7 +68,7 @@ pub(crate) fn question_text(req: &UnifiedRequest) -> String {
         .join("\n")
 }
 
-/// 构造一个只含单条用户消息的文本请求（给 judge 调用）
+/// Construct a request containing a single user text message (for calling the judge)
 pub(crate) fn make_text_request(prompt: &str, max_tokens: Option<u32>) -> UnifiedRequest {
     UnifiedRequest {
         items: vec![Item::Message {
@@ -89,13 +89,13 @@ impl Strategy for Synthesize {
         "synthesize"
     }
 
-    /// 执行合成策略：
-    /// 1. 并行调用所有成员，收集答案
-    /// 2. 根据 min_answers/strict 判断 diversity 状态
-    /// 3. 调用 judge 模型合成最终回答
-    /// 始终返回 Full（非流式）
+    /// Execute the synthesis strategy:
+    /// 1. Call all members in parallel and collect answers
+    /// 2. Determine diversity status based on min_answers/strict
+    /// 3. Call the judge model to synthesize the final answer
+    /// Always returns Full (non-streaming)
     async fn execute(&self, ctx: StrategyCtx<'_>) -> Result<StrategyOutput, FusionError> {
-        // 读取策略参数
+        // Read strategy parameters
         let min_answers = ctx
             .params
             .get("min_answers")
@@ -114,20 +114,20 @@ impl Strategy for Synthesize {
                 FusionError::StrategyError("synthesize requires params.judge".into())
             })?;
 
-        // 并行向所有成员发请求；recorder 会在 call_member 内部记录各自调用
+        // Send requests to all members in parallel; recorder logs each call inside call_member
         let futs = ctx
             .members
             .iter()
             .map(|m| call_member(m, &ctx.req, CallRole::Member, ctx.recorder));
         let results = join_all(futs).await;
 
-        // 收集成功的答案，同时写入 trace
+        // Collect successful answers and write to trace
         let mut answers: Vec<(String, String)> = Vec::new();
         for (m, r) in ctx.members.iter().zip(results) {
             if let Ok(resp) = r {
                 let text = answer_text(&resp);
                 if let Some(t) = ctx.trace {
-                    // 取响应中第一条调用记录作为 trace 用量；若无则构造零值占位
+                    // Use the first call record in the response as trace usage; construct zero-value placeholder if none
                     let u = resp.calls.first().cloned().unwrap_or(ModelUsage {
                         model_id: m.model_id.clone(),
                         role: CallRole::Member,
@@ -146,14 +146,14 @@ impl Strategy for Synthesize {
             }
         }
 
-        // 没有任何有效答案直接报错
+        // No valid answers at all — return error immediately
         if answers.is_empty() {
             return Err(FusionError::AllMembersFailed(
                 "synthesize: no panel answers".into(),
             ));
         }
 
-        // Diversity 分级：full / degraded / stop
+        // Diversity tiers: full / degraded / stop
         let status = if answers.len() >= ctx.members.len() {
             "full"
         } else if answers.len() >= min_answers {
@@ -164,7 +164,7 @@ impl Strategy for Synthesize {
         if let Some(t) = ctx.trace {
             t.set_status(status);
         }
-        // strict 模式：答案不足 min_answers 时中止
+        // Strict mode: abort when answers fall below min_answers
         if status == "stop" && strict {
             return Err(FusionError::StrategyError(format!(
                 "synthesize strict: only {} answers",
@@ -172,26 +172,26 @@ impl Strategy for Synthesize {
             )));
         }
 
-        // 解析 judge 成员，构建合成 prompt 并发起调用
+        // Resolve judge member, build synthesis prompt, and make the call
         let judge_member = ctx.resolver.resolve(judge_id).await?;
         let prompt = synthesis_prompt(&question_text(&ctx.req), &answers);
         let judge_req = make_text_request(&prompt, ctx.req.max_tokens);
         let judge_resp = match call_member(&judge_member, &judge_req, CallRole::Judge, ctx.recorder).await {
             Ok(r) => r,
             Err(e) => {
-                // judge 失败仍报错，但日志注明 panel 已成功收集答案(已付费工作不丢失，§7.4)
+                // judge failed but log that panel answers were successfully collected (paid work is not lost, §7.4)
                 tracing::warn!(
                     judge = judge_id,
                     panel_answers = answers.len(),
                     error = %e,
-                    "synthesize judge 调用失败，但已成功收集 {} 份成员答案(用量已计入统计)",
+                    "synthesize judge call failed, but {} member answers were successfully collected (usage already counted in stats)",
                     answers.len()
                 );
                 return Err(e);
             }
         };
 
-        // 把 judge 调用写入 trace
+        // Write the judge call into trace
         if let Some(t) = ctx.trace {
             let u = judge_resp.calls.first().cloned().unwrap_or(ModelUsage {
                 model_id: judge_id.into(),
@@ -206,7 +206,7 @@ impl Strategy for Synthesize {
             t.set_judge(&prompt, &answer_text(&judge_resp), &u);
         }
 
-        // synthesize 始终返回 Full（非流式）
+        // synthesize always returns Full (non-streaming)
         Ok(StrategyOutput::Full(judge_resp))
     }
 }
@@ -219,7 +219,7 @@ mod tests {
     use crate::strategy::{StrategyCtx, StrategyOutput};
     use crate::unified::{CallRecorder, StrategyTrace};
 
-    /// 在内存 DB 中插入 judge 模型行（连接器类型 "chat" 即可，测试会走 mock）
+    /// Insert the judge model row into the in-memory DB (connector type "chat" suffices; tests will use mock)
     async fn seed_judge(db: &Db) {
         db.model_upsert(&ModelRow {
             id: "j".into(),
@@ -239,7 +239,7 @@ mod tests {
     async fn collects_members_and_calls_judge() {
         let db = Db::open_memory().await.unwrap();
         seed_judge(&db).await;
-        // 使用 with_mock：judge 解析时直接返回 mock_member
+        // Use with_mock: judge resolution returns mock_member directly
         let resolver = crate::router::ModelResolver::with_mock(db.clone(), |_id| {
             mock_member(
                 "j",
@@ -285,9 +285,9 @@ mod tests {
             _ => panic!("expected Full"),
         }
         let snap = trace.snapshot();
-        // 两个成员的答案都应被收集
+        // Both member answers should be collected
         assert_eq!(snap["member_answers"].as_array().unwrap().len(), 2);
-        // judge 信息应存在
+        // judge info should be present
         assert!(snap["judge"].is_object());
     }
 
@@ -309,7 +309,7 @@ mod tests {
                 }],
             )],
             resolver: &resolver,
-            params: serde_json::json!({}), // 缺少 judge
+            params: serde_json::json!({}), // missing judge
             db: &db,
             want_stream: false,
             recorder: &recorder,

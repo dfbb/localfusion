@@ -83,7 +83,7 @@ pub async fn handle(state: InferenceState, proto: Proto, headers: HeaderMap, bod
     };
     let want_stream = req.stream;
 
-    // 取策略名（写 request_log 用）
+    // Get strategy name (used for writing request_log)
     let strategy = state
         .db
         .vmodel_get(&model)
@@ -108,7 +108,7 @@ pub async fn handle(state: InferenceState, proto: Proto, headers: HeaderMap, bod
             stream_real(state.db.clone(), model, strategy, recorder, proto, stream)
         }
         Err(e) => {
-            // 错误路径也写统计（drain 已发生调用）
+            // Error path also writes stats (drain has already occurred for calls)
             let calls = recorder.drain();
             let _ = write_stats(&state.db, &model, &strategy, &calls, true, now_secs()).await;
             err(proto, e)
@@ -121,7 +121,7 @@ fn err(proto: Proto, e: FusionError) -> Response {
     (code, Json(format_err_body(proto, &e.to_string()))).into_response()
 }
 
-/// panel/multimodal 的 Full → 伪流 SSE（统计已在 finalize_full 落库）。
+/// Full → pseudo-streaming SSE for panel/multimodal (stats already persisted in finalize_full).
 fn stream_from_full(proto: Proto, resp: crate::unified::UnifiedResponse) -> Response {
     use futures::stream;
     let text = resp
@@ -163,7 +163,7 @@ fn stream_from_full(proto: Proto, resp: crate::unified::UnifiedResponse) -> Resp
     Sse::new(s).into_response()
 }
 
-/// 单模型真流：边转发边收集尾用量，流关闭后 write_stats。
+/// Single-model real streaming: forward while collecting tail usage, write_stats after stream closes.
 fn stream_real(
     db: Db,
     model: String,
@@ -195,7 +195,7 @@ fn stream_real(
                 }
             }
         }
-        // 合并 recorder 暂存的失败尝试 + 尾用量，写统计
+        // Merge recorder's buffered failed attempts + tail usage, write stats
         let mut all = recorder.drain();
         if let Some(t) = tail { all.push(t); }
         let _ = write_stats(&db, &model, &strategy, &all, failed, now_secs()).await;

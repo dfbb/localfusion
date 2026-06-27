@@ -11,7 +11,7 @@ impl Db {
             .bind(is_probe as i64).bind(created_at).execute(&self.pool).await?;
         Ok(())
     }
-    /// 设计 §4：子查询取最近 limit 条再平均。
+    /// Design §4: subquery fetches the most recent `limit` rows, then averages them.
     pub async fn latency_avg_recent(&self, model_id: &str, limit: i64) -> Result<Option<f64>, FusionError> {
         let v: Option<f64> = sqlx::query_scalar(
             "SELECT AVG(throughput) FROM (
@@ -28,7 +28,7 @@ impl Db {
             .bind(since_ts).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
-    /// 最近 limit 条样本数（用于 latency 统计展示）
+    /// Number of samples in the most recent `limit` rows (used for latency statistics display).
     pub async fn latency_sample_count(&self, model_id: &str, limit: i64) -> Result<i64, FusionError> {
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM (
@@ -49,7 +49,7 @@ mod tests {
         db.latency_insert("m", 10, 1.0, false, 1).await.unwrap(); // throughput 10
         db.latency_insert("m", 40, 2.0, false, 2).await.unwrap(); // 20
         db.latency_insert("m", 90, 3.0, false, 3).await.unwrap(); // 30
-        let avg = db.latency_avg_recent("m", 2).await.unwrap().unwrap(); // 最近2条 30,20 → 25
+        let avg = db.latency_avg_recent("m", 2).await.unwrap().unwrap(); // last 2 samples: 30, 20 → 25
         assert!((avg - 25.0).abs() < 1e-9, "got {avg}");
     }
     #[tokio::test]

@@ -17,7 +17,7 @@ pub enum FusionError {
 }
 
 impl FusionError {
-    /// 映射 HTTP 状态（设计 §10）。Unauthorized 默认 401（ACL 拒绝场景调用方可改 403）。
+    /// Maps to HTTP status (design §10). Unauthorized defaults to 401 (callers may use 403 for ACL-denial scenarios).
     pub fn http_status(&self) -> u16 {
         match self {
             FusionError::InvalidRequest(_) => 400,

@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::error::FusionError;
 
-// 价格行记录：模型 ID、入价（美元/百万 tokens）、出价、更新时间戳
+// Price row record: model ID, input price (USD/million tokens), output price, updated timestamp
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct PriceRow {
     pub model_id: String,
@@ -11,14 +11,14 @@ pub struct PriceRow {
 }
 
 impl Db {
-    /// 获取所有价格记录，按 model_id 排序
+    /// Get all price records, ordered by model_id
     pub async fn price_list(&self) -> Result<Vec<PriceRow>, FusionError> {
         Ok(sqlx::query_as::<_, PriceRow>("SELECT * FROM prices ORDER BY model_id")
             .fetch_all(&self.pool)
             .await?)
     }
 
-    /// 按 model_id 获取单条价格记录，不存在时返回 None
+    /// Get a single price record by model_id; returns None if not found
     pub async fn price_get(&self, model_id: &str) -> Result<Option<PriceRow>, FusionError> {
         Ok(sqlx::query_as::<_, PriceRow>("SELECT * FROM prices WHERE model_id = ?")
             .bind(model_id)
@@ -26,7 +26,7 @@ impl Db {
             .await?)
     }
 
-    /// 插入或更新价格行；model_id 冲突时更新 price_in, price_out, updated_at
+    /// Insert or update a price row; on model_id conflict, update price_in, price_out, updated_at
     pub async fn price_upsert(&self, p: &PriceRow) -> Result<(), FusionError> {
         sqlx::query(
             "INSERT INTO prices(model_id, price_in, price_out, updated_at) VALUES(?,?,?,?)

@@ -1,5 +1,5 @@
-//! Anthropic Messages API 出口连接器
-//! 覆盖：请求构建、非流式响应解析、SSE 翻译（content_block_delta / message_delta）
+//! Anthropic Messages API egress connector
+//! Covers: request building, non-streaming response parsing, SSE translation (content_block_delta / message_delta)
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -11,17 +11,17 @@ use crate::unified::{
     UnifiedResponse, UnifiedStream, UnifiedStreamEvent, Usage,
 };
 
-// ── 请求构建 ──────────────────────────────────────────────────────────────────
+// ── Request Building ──────────────────────────────────────────────────────────────────
 
-/// 将 UnifiedRequest 转换为 Anthropic Messages 请求体 JSON
-/// system 消息单独提取，其余按 user/assistant 角色排列
+/// Convert a UnifiedRequest into an Anthropic Messages request body JSON.
+/// System messages are extracted separately; the rest are arranged by user/assistant role.
 pub(super) fn build_anthropic_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value {
     let mut system = String::new();
     let mut messages: Vec<Value> = Vec::new();
 
     for item in &req.items {
         if let Item::Message { role, content } = item {
-            // 将多个 ContentBlock::Text 拼接为单一字符串（忽略 Image 等）
+            // Concatenate multiple ContentBlock::Text blocks into a single string (ignoring Image, etc.)
             let text: String = content
                 .iter()
                 .filter_map(|c| match c {
@@ -46,7 +46,7 @@ pub(super) fn build_anthropic_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
         }
     }
 
-    // max_tokens 必填：优先取请求字段，其次取 ctx 默认值，最后兜底 1024
+    // max_tokens is required: prefer the request field, then ctx default, then fall back to 1024
     let max_tokens = req.max_tokens.or(ctx.default_max_tokens).unwrap_or(1024);
 
     let mut body = json!({
@@ -56,7 +56,7 @@ pub(super) fn build_anthropic_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
         "stream": req.stream,
     });
 
-    // system 可选
+    // system is optional
     if !system.is_empty() {
         body["system"] = json!(system);
     }
@@ -67,11 +67,11 @@ pub(super) fn build_anthropic_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
     body
 }
 
-// ── 非流式响应解析 ────────────────────────────────────────────────────────────
+// ── Non-Streaming Response Parsing ────────────────────────────────────────────────────────────
 
-/// 解析 Anthropic Messages 非流式响应 JSON，返回 UnifiedResponse
+/// Parse an Anthropic Messages non-streaming response JSON and return a UnifiedResponse.
 pub(super) fn parse_anthropic_response(json: &Value, model_id: &str) -> UnifiedResponse {
-    // 提取 content 数组中所有 type=text 块的文本
+    // Extract text from all type=text blocks in the content array
     let text: String = json
         .get("content")
         .and_then(|c| c.as_array())
@@ -122,17 +122,17 @@ pub(super) fn parse_anthropic_response(json: &Value, model_id: &str) -> UnifiedR
     }
 }
 
-// ── SSE 翻译器 ────────────────────────────────────────────────────────────────
+// ── SSE Translator ────────────────────────────────────────────────────────────
 
-/// Anthropic Messages SSE 流翻译状态机
-/// 处理 content_block_delta / message_start / message_delta / error 事件
+/// Anthropic Messages SSE stream translation state machine.
+/// Handles content_block_delta / message_start / message_delta / error events.
 pub(super) struct AnthropicSseState {
     model_id: String,
-    /// 累积的文本内容（用于 usage 估算）
+    /// Accumulated text content (used for usage estimation)
     text: String,
     input_tokens: u64,
     output_tokens: u64,
-    /// 是否收到过 usage 字段
+    /// Whether a usage field has been received
     has_usage: bool,
     stop_reason: Option<String>,
 }
@@ -156,7 +156,7 @@ impl SseTranslator for AnthropicSseState {
         let mut out = Vec::new();
 
         match ty {
-            // 文本增量：delta.type=text_delta 时携带 delta.text
+            // Text delta: delta.type=text_delta carries delta.text
             "content_block_delta" => {
                 if let Some(t) = evt.pointer("/delta/text").and_then(|v| v.as_str()) {
                     if !t.is_empty() {
@@ -165,7 +165,7 @@ impl SseTranslator for AnthropicSseState {
                     }
                 }
             }
-            // 消息开始：携带 input_tokens
+            // Message start: carries input_tokens
             "message_start" => {
                 if let Some(u) = evt
                     .pointer("/message/usage/input_tokens")
@@ -175,7 +175,7 @@ impl SseTranslator for AnthropicSseState {
                     self.has_usage = true;
                 }
             }
-            // 消息增量：携带最终 output_tokens 和 stop_reason
+            // Message delta: carries final output_tokens and stop_reason
             "message_delta" => {
                 if let Some(o) = evt
                     .pointer("/usage/output_tokens")
@@ -191,7 +191,7 @@ impl SseTranslator for AnthropicSseState {
                     self.stop_reason = Some(sr.to_string());
                 }
             }
-            // 上游返回错误对象时立即终止
+            // Terminate immediately when the upstream returns an error object
             "error" => return Err(ConnError::HardFail(format!("anthropic sse error: {evt}"))),
             _ => {}
         }
@@ -199,10 +199,10 @@ impl SseTranslator for AnthropicSseState {
         Ok(out)
     }
 
-    /// 流结束时产出 Done 事件，携带 usage 和 ModelUsage（供统计）
+    /// Emit a Done event at stream end, carrying usage and ModelUsage (for statistics).
     fn finish(&mut self) -> Vec<UnifiedStreamEvent> {
         let estimated = !self.has_usage;
-        // 若无 usage 字段则按字符数粗估（每4字符约1个 token）
+        // If no usage field, estimate roughly from character count (approx 1 token per 4 chars)
         let out_tokens = if self.output_tokens > 0 {
             self.output_tokens
         } else {
@@ -232,13 +232,13 @@ impl SseTranslator for AnthropicSseState {
     }
 }
 
-// ── Connector 实现 ────────────────────────────────────────────────────────────
+// ── Connector Implementation ────────────────────────────────────────────────────────────
 
 pub struct AnthropicConnector;
 
 #[async_trait]
 impl Connector for AnthropicConnector {
-    /// 非流式补全：发送请求并解析 JSON 响应
+    /// Non-streaming completion: send request and parse JSON response.
     async fn complete(
         &self,
         req: &UnifiedRequest,
@@ -274,7 +274,7 @@ impl Connector for AnthropicConnector {
         Ok(parse_anthropic_response(&json, &ctx.model))
     }
 
-    /// 流式补全：发送 SSE 请求，使用 AnthropicSseState 翻译事件
+    /// Streaming completion: send SSE request and translate events using AnthropicSseState.
     async fn stream(
         &self,
         req: &UnifiedRequest,
@@ -299,7 +299,7 @@ impl Connector for AnthropicConnector {
     }
 }
 
-// ── 单元测试 ──────────────────────────────────────────────────────────────────
+// ── Unit Tests ──────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

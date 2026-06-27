@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::error::FusionError;
 
-/// 模型表行结构体。
+/// Row struct for the models table.
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct ModelRow {
     pub id: String,
@@ -15,14 +15,14 @@ pub struct ModelRow {
 }
 
 impl Db {
-    /// 列出所有模型（按 id 排序）。
+    /// List all models (sorted by id).
     pub async fn model_list(&self) -> Result<Vec<ModelRow>, FusionError> {
         Ok(sqlx::query_as::<_, ModelRow>("SELECT * FROM models ORDER BY id")
             .fetch_all(&self.pool)
             .await?)
     }
 
-    /// 按 id 获取单个模型；不存在时返回 None。
+    /// Get a single model by id; returns None if not found.
     pub async fn model_get(&self, id: &str) -> Result<Option<ModelRow>, FusionError> {
         Ok(sqlx::query_as::<_, ModelRow>("SELECT * FROM models WHERE id = ?")
             .bind(id)
@@ -30,7 +30,7 @@ impl Db {
             .await?)
     }
 
-    /// Upsert 模型行（不存在时插入，存在时更新）。
+    /// Upsert a model row (insert if not exists, update if exists).
     pub async fn model_upsert(&self, m: &ModelRow) -> Result<(), FusionError> {
         sqlx::query(
             "INSERT INTO models(id, connector, base_url, api_key_enc, api_key_env, model, anthropic_version, extra)
@@ -52,7 +52,7 @@ impl Db {
         Ok(())
     }
 
-    /// 按 id 删除模型行。
+    /// Delete a model row by id.
     pub async fn model_delete(&self, id: &str) -> Result<(), FusionError> {
         sqlx::query("DELETE FROM models WHERE id = ?")
             .bind(id)

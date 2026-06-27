@@ -17,7 +17,7 @@ fn random_token() -> String {
     format!("lfadm-{}", STANDARD.encode(b))
 }
 
-/// 幂等：首启生成 enc_salt + admin token（直接打印，设计 §3/§9）+ 默认 bind；返回 enc_key。
+/// Idempotent: on first run, generates enc_salt + admin token (printed directly, design §3/§9) + default bind; returns enc_key.
 pub async fn ensure_initialized(db: &Db) -> Result<[u8; 32], FusionError> {
     // enc_salt
     let salt_b64 = match db.setting_get("enc_salt").await? {
@@ -34,20 +34,20 @@ pub async fn ensure_initialized(db: &Db) -> Result<[u8; 32], FusionError> {
         .map_err(|e| FusionError::Internal(format!("salt b64: {e}")))?;
     let enc_key = derive_key(&salt)?;
 
-    // admin token（仅首次）
+    // admin token (first run only)
     if db.setting_get("admin_token_hash").await?.is_none() {
         let token = random_token();
         db.setting_set("admin_token_hash", &sha256_hex(&token)).await?;
-        crate::logging::print_admin_token_once(&token); // 直接 println!，不经 tracing
+        crate::logging::print_admin_token_once(&token); // direct println!, not via tracing
     }
-    // 默认 bind
+    // default bind
     if db.setting_get("inference_bind").await?.is_none() {
         db.setting_set("inference_bind", "127.0.0.1:8787").await?;
     }
     if db.setting_get("admin_bind").await?.is_none() {
         db.setting_set("admin_bind", "127.0.0.1:8788").await?;
     }
-    let _ = now_secs(); // 预留
+    let _ = now_secs(); // reserved
     Ok(enc_key)
 }
 
@@ -69,7 +69,7 @@ mod tests {
             db.setting_get_or("admin_bind", "").await.unwrap(),
             "127.0.0.1:8788"
         );
-        // 第二次调用不重置 token（幂等）
+        // second call does not reset token (idempotent)
         let hash1 = db.setting_get("admin_token_hash").await.unwrap();
         let _ = ensure_initialized(&db).await.unwrap();
         assert_eq!(db.setting_get("admin_token_hash").await.unwrap(), hash1);

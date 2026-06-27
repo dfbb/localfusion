@@ -1,4 +1,4 @@
-/// 完整数据库 schema（设计 §4）
+/// Complete database schema (design §4)
 pub const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY, value TEXT NOT NULL

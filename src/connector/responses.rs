@@ -1,6 +1,6 @@
-//! OpenAI Responses API 出口连接器
-//! 请求格式：input 数组（每项含 role + content[{type:input_text,text}]）
-//! SSE 事件：response.output_text.delta / response.completed
+//! OpenAI Responses API egress connector
+//! Request format: input array (each item contains role + content[{type:input_text,text}])
+//! SSE events: response.output_text.delta / response.completed
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -12,10 +12,10 @@ use crate::unified::{
     UnifiedResponse, UnifiedStream, UnifiedStreamEvent, Usage,
 };
 
-// ── 请求构建 ──────────────────────────────────────────────────────────────────
+// ── Request Building ──────────────────────────────────────────────────────────
 
-/// 将 UnifiedRequest 转换为 OpenAI Responses API 请求体 JSON
-/// 每条消息映射为 input 数组中的 {role, content:[{type:input_text,text}]}
+/// Convert a UnifiedRequest into an OpenAI Responses API request body JSON
+/// Each message is mapped to an entry in the input array as {role, content:[{type:input_text,text}]}
 pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value {
     let mut input: Vec<Value> = Vec::new();
 
@@ -27,7 +27,7 @@ pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
                 Role::Assistant => "assistant",
                 Role::Tool => "user",
             };
-            // 拼接所有文本块（忽略图片等非文本块）
+            // Concatenate all text blocks (ignore non-text blocks such as images)
             let text: String = content
                 .iter()
                 .filter_map(|c| match c {
@@ -35,7 +35,7 @@ pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
                     _ => None,
                 })
                 .collect();
-            // assistant 历史消息的内容部件应为 output_text，user/system/tool 为 input_text
+            // assistant history message content type should be output_text; user/system/tool use input_text
             let content_type = match role {
                 Role::Assistant => "output_text",
                 _ => "input_text",
@@ -53,7 +53,7 @@ pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
         "stream": req.stream,
     });
 
-    // max_output_tokens：优先取请求字段，其次取 ctx 默认值
+    // max_output_tokens: use the request field first, fall back to ctx default
     if let Some(mt) = req.max_tokens.or(ctx.default_max_tokens) {
         body["max_output_tokens"] = json!(mt);
     }
@@ -64,10 +64,10 @@ pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
     body
 }
 
-// ── 非流式响应解析 ────────────────────────────────────────────────────────────
+// ── Non-streaming Response Parsing ───────────────────────────────────────────
 
-/// 解析 Responses API 非流式响应 JSON，返回 UnifiedResponse
-/// 响应格式：output:[{type:message, content:[{type:output_text, text}]}] + usage
+/// Parse a Responses API non-streaming response JSON, returning a UnifiedResponse
+/// Response format: output:[{type:message, content:[{type:output_text, text}]}] + usage
 pub(super) fn parse_responses_response(json: &Value, model_id: &str) -> UnifiedResponse {
     let mut text = String::new();
 
@@ -119,17 +119,17 @@ pub(super) fn parse_responses_response(json: &Value, model_id: &str) -> UnifiedR
     }
 }
 
-// ── SSE 翻译器 ────────────────────────────────────────────────────────────────
+// ── SSE Translator ────────────────────────────────────────────────────────────
 
-/// Responses API SSE 流翻译状态机
-/// 监听 response.output_text.delta 增量事件和 response.completed 用量事件
+/// Responses API SSE stream translation state machine
+/// Listens for response.output_text.delta incremental events and response.completed usage events
 pub(super) struct ResponsesSseState {
     model_id: String,
-    /// 累积文本（用于无 usage 时的 token 估算）
+    /// Accumulated text (used for token estimation when usage is absent)
     text: String,
     input_tokens: u64,
     output_tokens: u64,
-    /// 是否收到过 usage 字段
+    /// Whether a usage field has been received
     has_usage: bool,
 }
 
@@ -151,7 +151,7 @@ impl SseTranslator for ResponsesSseState {
         let mut out = Vec::new();
 
         match ty {
-            // 文本增量事件
+            // Text delta event
             "response.output_text.delta" => {
                 if let Some(d) = evt.get("delta").and_then(|v| v.as_str()) {
                     if !d.is_empty() {
@@ -160,7 +160,7 @@ impl SseTranslator for ResponsesSseState {
                     }
                 }
             }
-            // 完成/截断事件，携带用量数据
+            // Completion/truncation event, carries usage data
             "response.completed" | "response.incomplete" => {
                 if let Some(u) = evt.pointer("/response/usage") {
                     self.input_tokens = u
@@ -174,7 +174,7 @@ impl SseTranslator for ResponsesSseState {
                     self.has_usage = true;
                 }
             }
-            // 上游错误事件，立即终止流
+            // Upstream error event, terminate the stream immediately
             "error" | "response.failed" => {
                 return Err(ConnError::HardFail(format!("responses sse error: {evt}")));
             }
@@ -184,10 +184,10 @@ impl SseTranslator for ResponsesSseState {
         Ok(out)
     }
 
-    /// 流结束时产出 Done 事件，携带 usage 和 ModelUsage
+    /// Emit a Done event at stream end, carrying usage and ModelUsage
     fn finish(&mut self) -> Vec<UnifiedStreamEvent> {
         let estimated = !self.has_usage;
-        // 若无 usage 字段则按字符数粗估（每4字符约1个 token）
+        // If no usage field, rough-estimate from character count (approx 1 token per 4 chars)
         let out_tokens = if self.output_tokens > 0 {
             self.output_tokens
         } else {
@@ -217,13 +217,13 @@ impl SseTranslator for ResponsesSseState {
     }
 }
 
-// ── Connector 实现 ────────────────────────────────────────────────────────────
+// ── Connector Implementation ──────────────────────────────────────────────────
 
 pub struct ResponsesConnector;
 
 #[async_trait]
 impl Connector for ResponsesConnector {
-    /// 非流式补全：发送 Responses API 请求并解析 JSON 响应
+    /// Non-streaming completion: send a Responses API request and parse the JSON response
     async fn complete(
         &self,
         req: &UnifiedRequest,
@@ -259,7 +259,7 @@ impl Connector for ResponsesConnector {
         Ok(parse_responses_response(&json, &ctx.model))
     }
 
-    /// 流式补全：发送 SSE 请求，使用 ResponsesSseState 翻译事件
+    /// Streaming completion: send an SSE request and translate events using ResponsesSseState
     async fn stream(
         &self,
         req: &UnifiedRequest,
@@ -284,7 +284,7 @@ impl Connector for ResponsesConnector {
     }
 }
 
-// ── 单元测试 ──────────────────────────────────────────────────────────────────
+// ── Unit Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

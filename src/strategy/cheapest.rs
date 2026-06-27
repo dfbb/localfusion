@@ -23,8 +23,8 @@ impl Strategy for Cheapest {
         if ctx.members.is_empty() {
             return Err(FusionError::StrategyError("cheapest: no members".into()));
         }
-        // 输出估算:优先用请求的 max_tokens(spec §7.3「输出用 max_tokens 或历史均值」),
-        // 缺省再退回 params.output_estimate_max(默认 512)
+        // Output estimate: prefer the request's max_tokens (spec §7.3 "use max_tokens or historical average for output"),
+        // fall back to params.output_estimate_max (default 512) if absent
         let out_est = ctx
             .req
             .max_tokens

@@ -1,11 +1,11 @@
-// P4-T04：Anthropic Messages API 入口翻译层
-// 负责 Anthropic body ↔ Unified 格式互转（system + messages[].content 支持 string 或 block 数组）
+// P4-T04: Anthropic Messages API ingress translation layer
+// Handles Anthropic body ↔ Unified format conversion (system + messages[].content supports string or block array)
 use serde_json::{json, Value};
 
 use crate::error::FusionError;
 use crate::unified::*;
 
-/// 将 Anthropic content 字段（string 或 block 数组）统一转为文本
+/// Converts an Anthropic content field (string or block array) to plain text
 fn content_to_text(content: &Value) -> String {
     if let Some(s) = content.as_str() {
         return s.to_string();
@@ -19,11 +19,11 @@ fn content_to_text(content: &Value) -> String {
     String::new()
 }
 
-/// 解析 Anthropic Messages 请求体为 UnifiedRequest
+/// Parses an Anthropic Messages request body into a UnifiedRequest
 pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
     let mut items = Vec::new();
 
-    // 提取可选的 system 字段
+    // Extract the optional system field
     if let Some(sys) = body.get("system").and_then(|v| v.as_str()) {
         if !sys.is_empty() {
             items.push(Item::Message {
@@ -33,7 +33,7 @@ pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
         }
     }
 
-    // 提取必须的 messages 数组
+    // Extract the required messages array
     let msgs = body
         .get("messages")
         .and_then(|v| v.as_array())
@@ -70,7 +70,7 @@ pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
     })
 }
 
-/// 从 UnifiedResponse 中提取第一个 assistant 消息的文本内容
+/// Extracts the text content of the first assistant message from a UnifiedResponse
 fn answer_text(resp: &UnifiedResponse) -> String {
     resp.items
         .iter()
@@ -89,7 +89,7 @@ fn answer_text(resp: &UnifiedResponse) -> String {
         .unwrap_or_default()
 }
 
-/// 将 UnifiedResponse 格式化为 Anthropic Messages 响应体
+/// Formats a UnifiedResponse as an Anthropic Messages response body
 pub fn format_response(resp: &UnifiedResponse) -> Value {
     json!({
         "id": "msg-localfusion",
@@ -105,13 +105,13 @@ pub fn format_response(resp: &UnifiedResponse) -> Value {
     })
 }
 
-/// 按 Anthropic 协议格式化错误体（非流式）
+/// Formats an error body per the Anthropic protocol (non-streaming)
 pub fn format_error(message: &str) -> Value {
     json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}})
 }
 
-/// 将 UnifiedStreamEvent 转换为 Anthropic SSE data 行列表
-/// 注：v1 通过 sse_out 的 `data:` 帧统一发送，不单独输出 `event:` 行
+/// Converts a UnifiedStreamEvent into a list of Anthropic SSE data lines
+/// Note: v1 sends everything via sse_out's `data:` frames; no separate `event:` lines are emitted
 pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {
     match ev {
         UnifiedStreamEvent::Started { .. } => vec![

@@ -3,12 +3,12 @@ use crate::db::Db;
 use crate::error::FusionError;
 use crate::unified::{CallRecorder, CallStatus, ModelUsage};
 
-/// 将时间戳对齐到小时起点
+/// Align a timestamp to the start of its hour
 pub fn hour_floor(ts: i64) -> i64 {
     ts - ts.rem_euclid(3600)
 }
 
-/// 根据价格表计算单次调用的费用，找不到价格时返回 0.0
+/// Calculate the cost of a single call from the price table; returns 0.0 if no price is found
 pub async fn cost_for(db: &Db, usage: &ModelUsage) -> f64 {
     match db.price_get(&usage.model_id).await {
         Ok(Some(p)) => {
@@ -19,8 +19,8 @@ pub async fn cost_for(db: &Db, usage: &ModelUsage) -> f64 {
     }
 }
 
-/// 设计 §8：三维度累加 + request_log。
-/// all_calls = recorder.drain()（Full 路径）或 drain pre-Started 失败 + 流式 Done.call（Stream 路径）。
+/// Design §8: accumulate three dimensions + request_log.
+/// all_calls = recorder.drain() (Full path) or drain pre-Started failures + streaming Done.call (Stream path).
 pub async fn write_stats(
     db: &Db,
     virtual_name: &str,
@@ -34,7 +34,7 @@ pub async fn write_stats(
     let mut agg_out = 0u64;
     let mut agg_cost = 0.0f64;
 
-    // 按真实模型写 real 维度
+    // Write real dimension keyed by actual model
     for c in all_calls {
         let cost = cost_for(db, c).await;
         agg_in += c.input_tokens;
@@ -49,7 +49,7 @@ pub async fn write_stats(
         db.usage_upsert(hour, "real", &c.model_id, 1, &d).await?;
     }
 
-    // virtual 维度：按虚拟名聚合，errors 以 request_failed 为准
+    // virtual dimension: aggregate by virtual name, errors follow request_failed
     let req_err = request_failed as u64;
     let vd = UsageDelta {
         input_tokens: agg_in,
@@ -59,7 +59,7 @@ pub async fn write_stats(
     };
     db.usage_upsert(hour, "virtual", virtual_name, 1, &vd).await?;
 
-    // total 维度：全局聚合，model_id 用空字符串
+    // total dimension: global aggregate, model_id is empty string
     let td = UsageDelta {
         input_tokens: agg_in,
         output_tokens: agg_out,
@@ -68,7 +68,7 @@ pub async fn write_stats(
     };
     db.usage_upsert(hour, "total", "", 1, &td).await?;
 
-    // 写请求日志
+    // write request log
     let status = if request_failed { "error" } else { "ok" };
     db.request_log_insert(
         virtual_name,
@@ -83,7 +83,7 @@ pub async fn write_stats(
     Ok(())
 }
 
-/// Full 路径：drain recorder 后写库
+/// Full path: drain recorder then write to database
 pub async fn finalize_full(
     db: &Db,
     virtual_name: &str,

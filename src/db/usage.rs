@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::error::FusionError;
 
-/// 单次请求的增量统计数据
+/// Incremental statistics for a single request
 pub struct UsageDelta {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -9,7 +9,7 @@ pub struct UsageDelta {
     pub errors: u64,
 }
 
-/// usage_hourly 表的一行，对应查询结果
+/// A single row from the usage_hourly table, corresponding to a query result
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct UsageRow {
     pub hour_ts: i64,
@@ -24,7 +24,7 @@ pub struct UsageRow {
 }
 
 impl Db {
-    /// 原子累加：将 delta 写入 usage_hourly，已存在则按三维度 (hour_ts, scope, name) 累加
+    /// Atomic accumulation: write delta into usage_hourly; if the row exists, accumulate by three dimensions (hour_ts, scope, name)
     pub async fn usage_upsert(
         &self,
         hour_ts: i64,
@@ -59,7 +59,7 @@ impl Db {
         Ok(())
     }
 
-    /// 按 scope / name（可选）/ 时间范围查询聚合行，按 hour_ts 升序返回
+    /// Query aggregated rows by scope / name (optional) / time range, returned in ascending hour_ts order
     pub async fn usage_query(
         &self,
         scope: &str,
@@ -89,7 +89,7 @@ impl Db {
         Ok(rows)
     }
 
-    /// 写入一条 request_log 记录（外部请求维度，scope=virtual/total）
+    /// Insert a request_log record (external request dimension, scope=virtual/total)
     pub async fn request_log_insert(
         &self,
         virtual_name: &str,
