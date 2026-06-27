@@ -7,8 +7,38 @@ import { type ModelRow } from '../data/schema'
 type ModelsDialogType = 'add' | 'edit' | 'delete'
 
 export type TestResult =
-  | { ok: true; latency_ms: number; base_url_fixed?: string; connector_fixed?: string }
+  | { ok: true; latency_ms: number; max_tokens?: number; base_url_fixed?: string; connector_fixed?: string; model_fixed?: string }
   | { ok: false; error: string }
+
+// Raw JSON item returned by the backend probe endpoints.
+type ProbeResponseItem = {
+  id: string
+  ok: boolean
+  latency_ms?: number
+  error?: string
+  max_tokens?: number
+  base_url_fixed?: string
+  connector_fixed?: string
+  model_fixed?: string
+}
+
+function toTestResult(item: ProbeResponseItem): TestResult {
+  return item.ok
+    ? {
+        ok: true,
+        latency_ms: item.latency_ms ?? 0, // ok:true responses always include latency_ms; fallback to 0 guards against schema drift
+        max_tokens: item.max_tokens,
+        base_url_fixed: item.base_url_fixed,
+        connector_fixed: item.connector_fixed,
+        model_fixed: item.model_fixed,
+      }
+    : { ok: false, error: item.error ?? 'unknown error' }
+}
+
+// True if a successful probe auto-corrected any persisted field.
+function wasFixed(item: ProbeResponseItem): boolean {
+  return !!(item.base_url_fixed || item.connector_fixed || item.model_fixed)
+}
 
 type ModelsContextType = {
   open: ModelsDialogType | null
@@ -34,27 +64,16 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
     setTesting(true)
     setTestResults(new Map())
     try {
-      const resp = await api.post<
-        Array<{ id: string; ok: boolean; latency_ms?: number; error?: string; base_url_fixed?: string; connector_fixed?: string }>
-      >('/models/test-all')
+      const resp = await api.post<ProbeResponseItem[]>('/models/test-all')
       const map = new Map<string, TestResult>()
       let fixedCount = 0
       for (const item of resp.data) {
-        if (item.ok) {
-          if (item.base_url_fixed || item.connector_fixed) fixedCount++
-          map.set(item.id, {
-            ok: true,
-            latency_ms: item.latency_ms ?? 0, // ok:true responses always include latency_ms; fallback to 0 guards against schema drift
-            base_url_fixed: item.base_url_fixed,
-            connector_fixed: item.connector_fixed,
-          })
-        } else {
-          map.set(item.id, { ok: false, error: item.error ?? 'unknown error' })
-        }
+        if (item.ok && wasFixed(item)) fixedCount++
+        map.set(item.id, toTestResult(item))
       }
       setTestResults(map)
       if (fixedCount > 0) {
-        // connector/base_url was auto-corrected in the DB; force an immediate refetch
+        // connector/base_url/model was auto-corrected in the DB; force an immediate refetch
         await qc.refetchQueries({ queryKey: ['models'] })
         toast.success(`Auto-corrected config for ${fixedCount} model(s)`)
       }
@@ -74,16 +93,10 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       return next
     })
     try {
-      const resp = await api.post<{
-        id: string; ok: boolean; latency_ms?: number; error?: string
-        base_url_fixed?: string; connector_fixed?: string
-      }>(`/models/${id}/test`)
+      const resp = await api.post<ProbeResponseItem>(`/models/${id}/test`)
       const item = resp.data
-      const result: TestResult = item.ok
-        ? { ok: true, latency_ms: item.latency_ms ?? 0, base_url_fixed: item.base_url_fixed, connector_fixed: item.connector_fixed }
-        : { ok: false, error: item.error ?? 'unknown error' }
-      setTestResults(prev => new Map(prev).set(id, result))
-      if (item.ok && (item.base_url_fixed || item.connector_fixed)) {
+      setTestResults(prev => new Map(prev).set(id, toTestResult(item)))
+      if (item.ok && wasFixed(item)) {
         await qc.refetchQueries({ queryKey: ['models'] })
         toast.success('Auto-corrected config')
       }

@@ -193,16 +193,70 @@ fn base_url_candidates(base_url: &str) -> Vec<String> {
     out
 }
 
-/// Probe a single model row: try all (connector, base_url) candidates in order.
-/// Returns a JSON value with shape { id, ok, latency_ms?, error?, base_url_fixed?, connector_fixed? }.
-/// Persists any auto-correction to the database.
+/// Candidate max output token limits to probe, from largest to smallest. The first one
+/// the upstream accepts becomes the model's persisted `default_max_tokens`.
+const MAX_TOKEN_PROBES: [u32; 2] = [1_000_000, 200_000];
+/// Tiny max_tokens used for reachability probes (Step 1 / [1m] detection), so an oversized
+/// value never makes a reachable endpoint look unreachable.
+const PING_MAX_TOKENS: u32 = 8;
+
+/// Serialize a model's `extra` JSON with `default_max_tokens` set to the given value,
+/// preserving any other keys already present.
+fn extra_with_max_tokens(extra: Option<&str>, max_tokens: u32) -> String {
+    let mut obj = extra
+        .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    obj.insert("default_max_tokens".into(), serde_json::json!(max_tokens));
+    serde_json::Value::Object(obj).to_string()
+}
+
+/// Run one probe request against (kind, base_url, model_name, max_tokens). Returns Ok(latency_ms) or Err(message).
+async fn probe_attempt(
+    kind: crate::connector::ConnectorKind,
+    base_url: &str,
+    model_name: &str,
+    key: &Option<String>,
+    anthropic_version: Option<&str>,
+    max_tokens: u32,
+    http: &reqwest::Client,
+) -> Result<u64, String> {
+    use crate::connector::{make_connector, EgressCtx};
+    let egress = EgressCtx {
+        base_url: base_url.to_string(),
+        model: model_name.to_string(),
+        auth: kind.auth_kind(),
+        key: key.clone(),
+        anthropic_version: anthropic_version.map(String::from),
+        default_max_tokens: None,
+        http: http.clone(),
+    };
+    // The probe request carries max_tokens explicitly (req.max_tokens takes precedence
+    // over ctx.default_max_tokens in every connector), so this is what is actually sent.
+    let req = crate::probe::probe_request_with(max_tokens);
+    let connector = make_connector(kind);
+    let start = std::time::Instant::now();
+    connector
+        .complete(&req, &egress)
+        .await
+        .map(|_| start.elapsed().as_millis() as u64)
+        .map_err(|e| e.to_string())
+}
+
+/// Probe a single model row. Steps:
+///  1. Find a working (connector, base_url) — trying the configured combo first, then variants.
+///  2. If the model name has no `[1m]` suffix, probe the `{model}[1m]` variant; on success, rename to it.
+///  3. Probe the accepted max output tokens (1M first, then 200k); the first accepted size is stored.
+///
+/// Any auto-correction (connector/base_url/model/default_max_tokens) is persisted via model_upsert.
+/// Returns { id, ok, latency_ms?, error?, base_url_fixed?, connector_fixed?, model_fixed?, max_tokens? }.
 async fn probe_one(
     m: &crate::db::models::ModelRow,
     db: &crate::db::Db,
     enc_key: &[u8; 32],
     http: &reqwest::Client,
 ) -> serde_json::Value {
-    use crate::connector::{make_connector, resolve_key, ConnectorKind, EgressCtx};
+    use crate::connector::{resolve_key, ConnectorKind};
     use std::str::FromStr;
 
     let key = match resolve_key(m, enc_key) {
@@ -213,18 +267,14 @@ async fn probe_one(
         return serde_json::json!({ "id": m.id, "ok": false, "error": "key unavailable" });
     }
 
-    let default_max_tokens = m.extra.as_deref()
-        .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
-        .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
-        .map(|x| x as u32);
-
     let configured_kind = match ConnectorKind::from_str(&m.connector) {
         Ok(k) => k,
         Err(e) => return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) }),
     };
+    let av = m.anthropic_version.as_deref();
 
-    let req = crate::probe::probe_request();
-
+    // ── Step 1: find a working (connector, base_url) ─────────────────────────
+    // Probe order: configured kind × base_url variants first, then other kinds × variants.
     let mut candidates: Vec<(ConnectorKind, String)> = Vec::new();
     for base in base_url_candidates(&m.base_url) {
         candidates.push((configured_kind, base));
@@ -236,48 +286,74 @@ async fn probe_one(
         }
     }
 
+    let mut working: Option<(ConnectorKind, String, u64)> = None;
     let mut last_err = String::from("connection test failed");
-    for (idx, (kind, base_url)) in candidates.iter().enumerate() {
-        let egress = EgressCtx {
-            base_url: base_url.clone(),
-            model: m.model.clone(),
-            auth: kind.auth_kind(),
-            key: key.clone(),
-            anthropic_version: m.anthropic_version.clone(),
-            default_max_tokens,
-            http: http.clone(),
-        };
-        let connector = make_connector(*kind);
-        let start = std::time::Instant::now();
-        match connector.complete(&req, &egress).await {
-            Ok(_) => {
-                let ms = start.elapsed().as_millis() as u64;
-                if idx == 0 {
-                    return serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
-                }
-                let kind_changed = *kind != configured_kind;
-                let base_changed = base_url != m.base_url.trim_end_matches('/');
-                let persist = if kind_changed {
-                    db.model_update_connector_base_url(&m.id, kind.as_str(), base_url).await
-                } else {
-                    db.model_update_base_url(&m.id, base_url).await
-                };
-                if let Err(e) = persist {
-                    return serde_json::json!({
-                        "id": m.id, "ok": false,
-                        "error": short_err(&format!("detected {} {} but DB update failed: {e}", kind.as_str(), base_url))
-                    });
-                }
-                let mut out = serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
-                if base_changed { out["base_url_fixed"] = serde_json::json!(base_url); }
-                if kind_changed { out["connector_fixed"] = serde_json::json!(kind.as_str()); }
-                return out;
-            }
-            Err(e) => last_err = e.to_string(),
+    // Reachability probes use a tiny max_tokens so an oversized value never masks a reachable endpoint.
+    for (kind, base_url) in &candidates {
+        match probe_attempt(*kind, base_url, &m.model, &key, av, PING_MAX_TOKENS, http).await {
+            Ok(ms) => { working = Some((*kind, base_url.clone(), ms)); break; }
+            Err(e) => last_err = e,
+        }
+    }
+    let (work_kind, work_base, latency_ms) = match working {
+        Some(w) => w,
+        None => return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) }),
+    };
+
+    // ── Step 2: probe the [1m] model-name variant (only if not already suffixed) ──
+    // On success, switch to the [1m] model name.
+    let mut final_model = m.model.clone();
+    let mut model_fixed: Option<String> = None;
+    if !m.model.ends_with("[1m]") {
+        let variant = format!("{}[1m]", m.model);
+        if probe_attempt(work_kind, &work_base, &variant, &key, av, PING_MAX_TOKENS, http).await.is_ok() {
+            final_model = variant.clone();
+            model_fixed = Some(variant);
         }
     }
 
-    serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) })
+    // ── Step 3: probe the accepted max output tokens (largest first) ─────────
+    // Actually send each candidate size; the first the upstream accepts wins.
+    // If none are accepted (rare), leave the existing default untouched.
+    let mut max_tokens: Option<u32> = None;
+    for size in MAX_TOKEN_PROBES {
+        if probe_attempt(work_kind, &work_base, &final_model, &key, av, size, http).await.is_ok() {
+            max_tokens = Some(size);
+            break;
+        }
+    }
+
+    // ── Persist any change ───────────────────────────────────────────────────
+    let kind_changed = work_kind != configured_kind;
+    let base_changed = work_base != m.base_url.trim_end_matches('/');
+    let prev_max = m.extra.as_deref()
+        .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
+        .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
+        .map(|x| x as u32);
+    let max_changed = max_tokens.is_some() && max_tokens != prev_max;
+
+    if kind_changed || base_changed || model_fixed.is_some() || max_changed {
+        let mut row = m.clone();
+        row.connector = work_kind.as_str().to_string();
+        row.base_url = work_base.clone();
+        row.model = final_model.clone();
+        if let Some(mt) = max_tokens {
+            row.extra = Some(extra_with_max_tokens(m.extra.as_deref(), mt));
+        }
+        if let Err(e) = db.model_upsert(&row).await {
+            return serde_json::json!({
+                "id": m.id, "ok": false,
+                "error": short_err(&format!("probe ok but DB update failed: {e}"))
+            });
+        }
+    }
+
+    let mut out = serde_json::json!({ "id": m.id, "ok": true, "latency_ms": latency_ms });
+    if let Some(mt) = max_tokens { out["max_tokens"] = serde_json::json!(mt); }
+    if base_changed { out["base_url_fixed"] = serde_json::json!(work_base); }
+    if kind_changed { out["connector_fixed"] = serde_json::json!(work_kind.as_str()); }
+    if let Some(mf) = model_fixed { out["model_fixed"] = serde_json::json!(mf); }
+    out
 }
 
 async fn test_one_model(
@@ -323,7 +399,6 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
         .map(|m| {
             let db = s.db.clone();
             let http = http.clone();
-            let enc_key = enc_key;
             async move { probe_one(&m, &db, &enc_key, &http).await }
         })
         .collect();
@@ -919,7 +994,8 @@ async fn put_logging(
 
 #[cfg(test)]
 mod tests {
-    use super::base_url_candidates;
+    use super::{base_url_candidates, extra_with_max_tokens};
+    use serde_json::Value;
 
     #[test]
     fn candidate_adds_v1_when_missing() {
@@ -943,5 +1019,29 @@ mod tests {
             base_url_candidates("http://x.com/v1/"),
             vec!["http://x.com/v1", "https://x.com/v1", "http://x.com", "https://x.com"],
         );
+    }
+
+    #[test]
+    fn extra_sets_max_tokens_on_empty() {
+        let out = extra_with_max_tokens(None, 200_000);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["default_max_tokens"], 200_000);
+    }
+
+    #[test]
+    fn extra_preserves_other_keys_and_overwrites_max_tokens() {
+        let prev = r#"{"timeout":30,"default_max_tokens":8}"#;
+        let out = extra_with_max_tokens(Some(prev), 1_000_000);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["timeout"], 30);
+        assert_eq!(v["default_max_tokens"], 1_000_000);
+    }
+
+    #[test]
+    fn extra_handles_malformed_input() {
+        // Non-JSON or non-object input is replaced with a fresh object.
+        let out = extra_with_max_tokens(Some("not json"), 200_000);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["default_max_tokens"], 200_000);
     }
 }

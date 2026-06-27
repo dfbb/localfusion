@@ -12,13 +12,19 @@ fn now_secs() -> i64 {
 }
 
 pub(crate) fn probe_request() -> UnifiedRequest {
+    probe_request_with(8)
+}
+
+/// Build a minimal probe request with an explicit max_tokens, used by connectivity
+/// testing to probe a model's accepted max output tokens.
+pub(crate) fn probe_request_with(max_tokens: u32) -> UnifiedRequest {
     UnifiedRequest {
         items: vec![Item::Message {
             role: Role::User,
             content: vec![ContentBlock::Text("ping".into())],
         }],
         tools: vec![],
-        max_tokens: Some(8),
+        max_tokens: Some(max_tokens),
         temperature: None,
         stream: false,
         raw_extra: serde_json::Value::Null,
