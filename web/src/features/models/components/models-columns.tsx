@@ -12,6 +12,36 @@ import {
 import { type ModelRow } from '../data/schema'
 import { useModels } from './models-provider'
 
+function StatusCell({ modelId }: { modelId: string }) {
+  const { testing, testResults } = useModels()
+  const result = testResults.get(modelId)
+
+  if (testing && !result) {
+    return <span className="text-muted-foreground text-sm">⋯</span>
+  }
+  if (!result) {
+    return <span className="text-muted-foreground text-sm">—</span>
+  }
+  if (result.ok) {
+    return (
+      <span className="text-green-600 dark:text-green-400 text-sm font-mono">
+        ✓ {result.latency_ms}ms
+      </span>
+    )
+  }
+  const short = result.error.length > 12
+    ? result.error.slice(0, 12) + '…'
+    : result.error
+  return (
+    <span
+      className="text-red-600 dark:text-red-400 text-sm font-mono cursor-default"
+      title={result.error}
+    >
+      ✗ {short}
+    </span>
+  )
+}
+
 const connectorColors: Record<string, string> = {
   chat: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
   anthropic: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
@@ -105,6 +135,11 @@ export const modelsColumns: ColumnDef<ModelRow>[] = [
       }
       return <span className="text-sm text-muted-foreground">未配置</span>
     },
+  },
+  {
+    id: 'status',
+    header: 'Status',
+    cell: ({ row }) => <StatusCell modelId={row.original.id} />,
   },
   {
     id: 'actions',
