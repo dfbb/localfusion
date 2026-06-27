@@ -60,6 +60,16 @@ impl Db {
             .await?;
         Ok(())
     }
+
+    /// Update only the base_url of a model (used by connectivity auto-detection).
+    pub async fn model_update_base_url(&self, id: &str, base_url: &str) -> Result<(), FusionError> {
+        sqlx::query("UPDATE models SET base_url = ? WHERE id = ?")
+            .bind(base_url)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

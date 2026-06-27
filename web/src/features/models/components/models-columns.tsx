@@ -30,11 +30,13 @@ function StatusCell({ modelId }: { modelId: string }) {
   }
 
   const label = result.ok
-    ? `✓ ${result.latency_ms}ms`
+    ? `✓ ${result.latency_ms}ms${result.base_url_fixed ? ' (fixed)' : ''}`
     : `✗ ${result.error.length > 20 ? result.error.slice(0, 20) + '…' : result.error}`
 
   const tooltipText = result.ok
-    ? `OK — ${result.latency_ms}ms`
+    ? result.base_url_fixed
+      ? `OK — ${result.latency_ms}ms · base_url auto-corrected to ${result.base_url_fixed}`
+      : `OK — ${result.latency_ms}ms`
     : result.error
 
   const textClass = result.ok

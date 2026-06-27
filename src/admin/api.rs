@@ -142,6 +142,30 @@ pub fn models_test_routes() -> Router<AdminState> {
     Router::new().route("/admin/api/models/test-all", post(test_all_models))
 }
 
+/// Truncate an error message to at most 60 chars (UTF-8 safe) for the response.
+fn short_err(msg: &str) -> String {
+    let mut chars = msg.chars();
+    let s: String = chars.by_ref().take(60).collect();
+    if chars.next().is_some() { format!("{s}…") } else { s }
+}
+
+/// Generate alternative base_url candidates to try when the configured one fails.
+/// The most common misconfiguration is a missing (or extra) `/v1` segment, since
+/// the connector appends the provider path (e.g. `/chat/completions`) onto base_url.
+/// Returns candidates in priority order, excluding the original.
+fn base_url_candidates(base_url: &str) -> Vec<String> {
+    let trimmed = base_url.trim_end_matches('/');
+    let mut out = Vec::new();
+    if trimmed.ends_with("/v1") {
+        // Configured with /v1 → try without it
+        out.push(trimmed.trim_end_matches("/v1").to_string());
+    } else {
+        // Configured without /v1 → try appending it
+        out.push(format!("{trimmed}/v1"));
+    }
+    out.into_iter().filter(|c| c != base_url && !c.is_empty()).collect()
+}
+
 async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
     if let Err(r) = require_admin(&s, &h).await {
         return r;
@@ -157,34 +181,51 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
         .into_iter()
         .map(|m| {
             let resolver = resolver.clone();
+            let db = s.db.clone();
             let id = m.id.clone();
+            let configured_base = m.base_url.clone();
             async move {
-                match resolver.resolve(&id).await {
+                let mut member = match resolver.resolve(&id).await {
+                    Ok(member) => member,
                     Err(e) => {
-                        let msg = e.to_string();
-                        let mut chars = msg.chars();
-                        let short: String = chars.by_ref().take(60).collect();
-                        let short = if chars.next().is_some() { format!("{short}…") } else { short };
-                        serde_json::json!({ "id": id, "ok": false, "error": short })
+                        return serde_json::json!({ "id": id, "ok": false, "error": short_err(&e.to_string()) });
                     }
-                    Ok(member) => {
-                        let req = crate::probe::probe_request();
-                        let start = std::time::Instant::now();
-                        match member.connector.complete(&req, &member.egress).await {
-                            Ok(_) => {
-                                let ms = start.elapsed().as_millis() as u64;
-                                serde_json::json!({ "id": id, "ok": true, "latency_ms": ms })
+                };
+
+                let req = crate::probe::probe_request();
+
+                // First attempt: the configured base_url
+                let start = std::time::Instant::now();
+                if member.connector.complete(&req, &member.egress).await.is_ok() {
+                    let ms = start.elapsed().as_millis() as u64;
+                    return serde_json::json!({ "id": id, "ok": true, "latency_ms": ms });
+                }
+
+                // Failed: try alternative base_url candidates (e.g. missing /v1)
+                let mut last_err = String::from("connection test failed");
+                for candidate in base_url_candidates(&configured_base) {
+                    member.egress.base_url = candidate.clone();
+                    let start = std::time::Instant::now();
+                    match member.connector.complete(&req, &member.egress).await {
+                        Ok(_) => {
+                            let ms = start.elapsed().as_millis() as u64;
+                            // Persist the corrected base_url to the DB
+                            if let Err(e) = db.model_update_base_url(&id, &candidate).await {
+                                return serde_json::json!({
+                                    "id": id, "ok": false,
+                                    "error": short_err(&format!("detected {candidate} but DB update failed: {e}"))
+                                });
                             }
-                            Err(e) => {
-                                let msg = e.to_string();
-                                let mut chars = msg.chars();
-                                let short: String = chars.by_ref().take(60).collect();
-                                let short = if chars.next().is_some() { format!("{short}…") } else { short };
-                                serde_json::json!({ "id": id, "ok": false, "error": short })
-                            }
+                            return serde_json::json!({
+                                "id": id, "ok": true, "latency_ms": ms,
+                                "base_url_fixed": candidate
+                            });
                         }
+                        Err(e) => last_err = e.to_string(),
                     }
                 }
+
+                serde_json::json!({ "id": id, "ok": false, "error": short_err(&last_err) })
             }
         })
         .collect();
@@ -777,3 +818,20 @@ async fn put_logging(
         .into_response()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::base_url_candidates;
+
+    #[test]
+    fn candidate_adds_v1_when_missing() {
+        assert_eq!(base_url_candidates("https://x.com"), vec!["https://x.com/v1"]);
+        assert_eq!(base_url_candidates("https://x.com/"), vec!["https://x.com/v1"]);
+    }
+
+    #[test]
+    fn candidate_removes_v1_when_present() {
+        assert_eq!(base_url_candidates("https://x.com/v1"), vec!["https://x.com"]);
+        assert_eq!(base_url_candidates("https://x.com/v1/"), vec!["https://x.com"]);
+    }
+}
