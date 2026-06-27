@@ -42,11 +42,24 @@ const defaultValues: ModelForm = {
   extra: '',
 }
 
+/** Read default_max_tokens from an extra JSON string, or null if absent/malformed. */
+function parseMaxTokens(extra: string | null | undefined): number | null {
+  if (!extra) return null
+  try {
+    const v = (JSON.parse(extra) as Record<string, unknown>)?.default_max_tokens
+    return typeof v === 'number' ? v : null
+  } catch {
+    return null
+  }
+}
+
 export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const isEdit = !!currentRow
   const qc = useQueryClient()
   const { runTestOne } = useModels()
   const [keyMode, setKeyMode] = useState<'direct' | 'env'>('direct')
+  // Auto-detected max output tokens, persisted in extra.default_max_tokens; shown read-only.
+  const maxTokens = parseMaxTokens(currentRow?.extra)
 
   const {
     register,
@@ -272,18 +285,28 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
             </div>
           </div>
 
-          {/* Extra JSON */}
-          <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
-            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="model-extra">
-              Extra (JSON)
-            </LabelPrimitive.Root>
-            <Input
-              id="model-extra"
-              className="col-span-4"
-              placeholder='{"timeout":30}'
-              {...register('extra')}
-            />
-          </div>
+          {/* Max output tokens — auto-detected by connectivity probing, read-only */}
+          {isEdit && (
+            <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
+              <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="model-max-tokens">
+                Max Tokens
+              </LabelPrimitive.Root>
+              <Input
+                id="model-max-tokens"
+                className="col-span-4"
+                value={maxTokens != null ? maxTokens.toLocaleString() : '未检测'}
+                readOnly
+                disabled
+                placeholder="未检测"
+              />
+              <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
+                由连接测试自动检测，不可编辑
+              </p>
+            </div>
+          )}
+
+          {/* extra is carried through hidden — auto-managed (default_max_tokens), not user-editable */}
+          <input type="hidden" {...register('extra')} />
         </form>
 
         <DialogFooter>
