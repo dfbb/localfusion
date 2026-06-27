@@ -18,6 +18,7 @@ type ModelsContextType = {
   testing: boolean
   testResults: Map<string, TestResult>
   runTestAll: () => Promise<void>
+  runTestOne: (id: string) => void
 }
 
 const ModelsContext = React.createContext<ModelsContextType | null>(null)
@@ -65,8 +66,34 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function runTestOne(id: string) {
+    setTestResults(prev => {
+      const next = new Map(prev)
+      // Mark as in-progress by removing any stale result for this id
+      next.delete(id)
+      return next
+    })
+    try {
+      const resp = await api.post<{
+        id: string; ok: boolean; latency_ms?: number; error?: string
+        base_url_fixed?: string; connector_fixed?: string
+      }>(`/models/${id}/test`)
+      const item = resp.data
+      const result: TestResult = item.ok
+        ? { ok: true, latency_ms: item.latency_ms ?? 0, base_url_fixed: item.base_url_fixed, connector_fixed: item.connector_fixed }
+        : { ok: false, error: item.error ?? 'unknown error' }
+      setTestResults(prev => new Map(prev).set(id, result))
+      if (item.ok && (item.base_url_fixed || item.connector_fixed)) {
+        await qc.refetchQueries({ queryKey: ['models'] })
+        toast.success('Auto-corrected config')
+      }
+    } catch {
+      // silently ignore — the user didn't explicitly request this test
+    }
+  }
+
   return (
-    <ModelsContext value={{ open, setOpen, currentRow, setCurrentRow, testing, testResults, runTestAll }}>
+    <ModelsContext value={{ open, setOpen, currentRow, setCurrentRow, testing, testResults, runTestAll, runTestOne }}>
       {children}
     </ModelsContext>
   )

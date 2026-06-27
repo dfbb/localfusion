@@ -139,7 +139,9 @@ async fn delete_model(
 // ─── model connectivity test ───────────────────────────────────────────────
 
 pub fn models_test_routes() -> Router<AdminState> {
-    Router::new().route("/admin/api/models/test-all", post(test_all_models))
+    Router::new()
+        .route("/admin/api/models/test-all", post(test_all_models))
+        .route("/admin/api/models/:id/test", post(test_one_model))
 }
 
 /// Truncate an error message to at most 60 chars (UTF-8 safe) for the response.
@@ -191,10 +193,115 @@ fn base_url_candidates(base_url: &str) -> Vec<String> {
     out
 }
 
-async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
+/// Probe a single model row: try all (connector, base_url) candidates in order.
+/// Returns a JSON value with shape { id, ok, latency_ms?, error?, base_url_fixed?, connector_fixed? }.
+/// Persists any auto-correction to the database.
+async fn probe_one(
+    m: &crate::db::models::ModelRow,
+    db: &crate::db::Db,
+    enc_key: &[u8; 32],
+    http: &reqwest::Client,
+) -> serde_json::Value {
     use crate::connector::{make_connector, resolve_key, ConnectorKind, EgressCtx};
     use std::str::FromStr;
 
+    let key = match resolve_key(m, enc_key) {
+        Ok(k) => k,
+        Err(e) => return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) }),
+    };
+    if key.is_none() {
+        return serde_json::json!({ "id": m.id, "ok": false, "error": "key unavailable" });
+    }
+
+    let default_max_tokens = m.extra.as_deref()
+        .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
+        .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
+        .map(|x| x as u32);
+
+    let configured_kind = match ConnectorKind::from_str(&m.connector) {
+        Ok(k) => k,
+        Err(e) => return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) }),
+    };
+
+    let req = crate::probe::probe_request();
+
+    let mut candidates: Vec<(ConnectorKind, String)> = Vec::new();
+    for base in base_url_candidates(&m.base_url) {
+        candidates.push((configured_kind, base));
+    }
+    for kind in ConnectorKind::all() {
+        if kind == configured_kind { continue; }
+        for base in base_url_candidates(&m.base_url) {
+            candidates.push((kind, base));
+        }
+    }
+
+    let mut last_err = String::from("connection test failed");
+    for (idx, (kind, base_url)) in candidates.iter().enumerate() {
+        let egress = EgressCtx {
+            base_url: base_url.clone(),
+            model: m.model.clone(),
+            auth: kind.auth_kind(),
+            key: key.clone(),
+            anthropic_version: m.anthropic_version.clone(),
+            default_max_tokens,
+            http: http.clone(),
+        };
+        let connector = make_connector(*kind);
+        let start = std::time::Instant::now();
+        match connector.complete(&req, &egress).await {
+            Ok(_) => {
+                let ms = start.elapsed().as_millis() as u64;
+                if idx == 0 {
+                    return serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
+                }
+                let kind_changed = *kind != configured_kind;
+                let base_changed = base_url != m.base_url.trim_end_matches('/');
+                let persist = if kind_changed {
+                    db.model_update_connector_base_url(&m.id, kind.as_str(), base_url).await
+                } else {
+                    db.model_update_base_url(&m.id, base_url).await
+                };
+                if let Err(e) = persist {
+                    return serde_json::json!({
+                        "id": m.id, "ok": false,
+                        "error": short_err(&format!("detected {} {} but DB update failed: {e}", kind.as_str(), base_url))
+                    });
+                }
+                let mut out = serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
+                if base_changed { out["base_url_fixed"] = serde_json::json!(base_url); }
+                if kind_changed { out["connector_fixed"] = serde_json::json!(kind.as_str()); }
+                return out;
+            }
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+
+    serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) })
+}
+
+async fn test_one_model(
+    State(s): State<AdminState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(r) = require_admin(&s, &h).await {
+        return r;
+    }
+    let m = match s.db.model_get(&id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response(),
+        Err(e) => return err_response(e),
+    };
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default();
+    let result = probe_one(&m, &s.db, &s.enc_key, &http).await;
+    Json(result).into_response()
+}
+
+async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
     if let Err(r) = require_admin(&s, &h).await {
         return r;
     }
@@ -216,97 +323,8 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
         .map(|m| {
             let db = s.db.clone();
             let http = http.clone();
-            async move {
-                // Resolve the API key once (shared across all probe attempts)
-                let key = match resolve_key(&m, &enc_key) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) });
-                    }
-                };
-                if key.is_none() {
-                    return serde_json::json!({ "id": m.id, "ok": false, "error": "key unavailable" });
-                }
-
-                let default_max_tokens = m.extra.as_deref()
-                    .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
-                    .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
-                    .map(|x| x as u32);
-
-                let configured_kind = match ConnectorKind::from_str(&m.connector) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) });
-                    }
-                };
-
-                let req = crate::probe::probe_request();
-
-                // Build the probe order: configured (kind, base_url) variants first,
-                // then every other connector kind with its base_url variants.
-                // Each entry is (ConnectorKind, base_url).
-                let mut candidates: Vec<(ConnectorKind, String)> = Vec::new();
-                for base in base_url_candidates(&m.base_url) {
-                    candidates.push((configured_kind, base));
-                }
-                for kind in ConnectorKind::all() {
-                    if kind == configured_kind {
-                        continue;
-                    }
-                    for base in base_url_candidates(&m.base_url) {
-                        candidates.push((kind, base));
-                    }
-                }
-
-                let mut last_err = String::from("connection test failed");
-                for (idx, (kind, base_url)) in candidates.iter().enumerate() {
-                    let egress = EgressCtx {
-                        base_url: base_url.clone(),
-                        model: m.model.clone(),
-                        auth: kind.auth_kind(),
-                        key: key.clone(),
-                        anthropic_version: m.anthropic_version.clone(),
-                        default_max_tokens,
-                        http: http.clone(),
-                    };
-                    let connector = make_connector(*kind);
-                    let start = std::time::Instant::now();
-                    match connector.complete(&req, &egress).await {
-                        Ok(_) => {
-                            let ms = start.elapsed().as_millis() as u64;
-                            // idx==0 is the configured (kind, base_url) — nothing changed
-                            if idx == 0 {
-                                return serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
-                            }
-                            // A different (kind and/or base_url) worked — persist it
-                            let kind_changed = *kind != configured_kind;
-                            let base_changed = base_url != m.base_url.trim_end_matches('/');
-                            let persist = if kind_changed {
-                                db.model_update_connector_base_url(&m.id, kind.as_str(), base_url).await
-                            } else {
-                                db.model_update_base_url(&m.id, base_url).await
-                            };
-                            if let Err(e) = persist {
-                                return serde_json::json!({
-                                    "id": m.id, "ok": false,
-                                    "error": short_err(&format!("detected {} {} but DB update failed: {e}", kind.as_str(), base_url))
-                                });
-                            }
-                            let mut out = serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
-                            if base_changed {
-                                out["base_url_fixed"] = serde_json::json!(base_url);
-                            }
-                            if kind_changed {
-                                out["connector_fixed"] = serde_json::json!(kind.as_str());
-                            }
-                            return out;
-                        }
-                        Err(e) => last_err = e.to_string(),
-                    }
-                }
-
-                serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) })
-            }
+            let enc_key = enc_key;
+            async move { probe_one(&m, &db, &enc_key, &http).await }
         })
         .collect();
 

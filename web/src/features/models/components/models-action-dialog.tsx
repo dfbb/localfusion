@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { useModels } from './models-provider'
 import { Label as LabelPrimitive, RadioGroup as RadioGroupPrimitive } from 'radix-ui'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,7 @@ const defaultValues: ModelForm = {
 export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const isEdit = !!currentRow
   const qc = useQueryClient()
+  const { runTestOne } = useModels()
   const [keyMode, setKeyMode] = useState<'direct' | 'env'>('direct')
 
   const {
@@ -84,10 +86,14 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const m = useMutation({
     mutationFn: (v: ModelForm) =>
       isEdit ? api.put(`/models/${v.id}`, v) : api.post('/models', v),
-    onSuccess: () => {
+    onSuccess: (_data, v) => {
       qc.invalidateQueries({ queryKey: ['models'] })
       toast.success('已保存')
       onOpenChange(false)
+      if (isEdit) {
+        // Fire-and-forget: probe the saved model to auto-correct base_url/connector if needed
+        runTestOne(v.id)
+      }
     },
     onError: () => toast.error('保存失败'),
   })
