@@ -18,6 +18,9 @@ use localfusion::ingress::handler::{handle, InferenceState, Proto};
 struct Cli {
     #[arg(long, default_value = "./localfusion.db")]
     db: String,
+    /// Print all debug-level log output to stdout, overriding the DB log_level setting.
+    #[arg(long, default_value_t = false)]
+    debug: bool,
 }
 
 async fn chat(State(s): State<InferenceState>, h: HeaderMap, Json(b): Json<Value>) -> Response {
@@ -39,17 +42,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open(&cli.db).await?;
 
     // Logging (use settings from db first, fall back to defaults)
-    let level = db
-        .setting_get_or("log_level", "info")
-        .await
-        .unwrap_or_else(|_| "info".into());
+    // --debug overrides both log_level and to_stdout for the current run only (no DB write)
+    let level = if cli.debug {
+        "debug".to_string()
+    } else {
+        db.setting_get_or("log_level", "info")
+            .await
+            .unwrap_or_else(|_| "info".into())
+    };
     let file = db
         .setting_get("log_file")
         .await
         .ok()
         .flatten()
         .filter(|s| !s.is_empty());
-    let to_stdout = db
+    let to_stdout = cli.debug || db
         .setting_get_or("log_to_stdout", "true")
         .await
         .unwrap_or_else(|_| "true".into())

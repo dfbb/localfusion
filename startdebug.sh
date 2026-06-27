@@ -14,4 +14,4 @@ cargo build
 mkdir -p "$DB_DIR"
 
 echo "==> Starting LocalFusion (debug) — db: $DB_PATH"
-exec "$REPO_ROOT/target/debug/localfusion" --db "$DB_PATH"
+exec "$REPO_ROOT/target/debug/localfusion" --db "$DB_PATH" --debug
