@@ -16,14 +16,14 @@ use crate::error::FusionError;
 use crate::router::ModelResolver;
 use crate::unified::*;
 
-/// 单个成员模型句柄，持有连接器和出口上下文
+/// Single member model handle, holds the connector and egress context
 pub struct MemberHandle {
     pub model_id: String,
     pub connector: Box<dyn Connector>,
     pub egress: EgressCtx,
 }
 
-/// 策略执行上下文，传入每个策略的 execute 调用
+/// Strategy execution context, passed into each strategy's execute call
 pub struct StrategyCtx<'a> {
     pub req: UnifiedRequest,
     pub members: Vec<MemberHandle>,
@@ -35,20 +35,20 @@ pub struct StrategyCtx<'a> {
     pub trace: Option<&'a StrategyTrace>,
 }
 
-/// 策略输出：流式或完整响应
+/// Strategy output: streaming or full response
 pub enum StrategyOutput {
     Stream(UnifiedStream),
     Full(UnifiedResponse),
 }
 
-/// 编排策略 trait；每种策略实现一次
+/// Orchestration strategy trait; each strategy implements this once
 #[async_trait]
 pub trait Strategy: Send + Sync {
     fn name(&self) -> &str;
     async fn execute(&self, ctx: StrategyCtx<'_>) -> Result<StrategyOutput, FusionError>;
 }
 
-/// 根据名称创建对应策略实例；未知名称返回 None
+/// Create the corresponding strategy instance by name; returns None for unknown names
 pub fn make_strategy(name: &str) -> Option<Box<dyn Strategy>> {
     match name {
         "failover" => Some(Box::new(failover::Failover)),
@@ -61,7 +61,7 @@ pub fn make_strategy(name: &str) -> Option<Box<dyn Strategy>> {
     }
 }
 
-/// 返回指定策略的参数 JSON Schema
+/// Returns the parameter JSON Schema for the specified strategy
 pub fn params_schema(name: &str) -> serde_json::Value {
     use serde_json::json;
     match name {
@@ -89,8 +89,8 @@ pub fn params_schema(name: &str) -> serde_json::Value {
         "cheapest" => json!({
             "type": "object",
             "properties": {
-                "tokenizer": { "type": "string", "enum": ["approx"], "default": "approx", "description": "输入 token 估算方式(目前仅 approx: 字符数/4)" },
-                "output_estimate_max": { "type": "integer", "default": 512, "description": "无 max_tokens 时的输出 token 估算上限" }
+                "tokenizer": { "type": "string", "enum": ["approx"], "default": "approx", "description": "Input token estimation method (currently only approx: char_count/4)" },
+                "output_estimate_max": { "type": "integer", "default": 512, "description": "Upper bound for output token estimate when max_tokens is not set" }
             }
         }),
         "multimodal" => json!({
@@ -107,9 +107,9 @@ pub fn params_schema(name: &str) -> serde_json::Value {
     }
 }
 
-/// 调用单个成员；记录成功/失败元数据到 recorder
-/// 统计权威：recorder.drain()，不读 UnifiedResponse.calls
-#[allow(dead_code)] // P3-T02+ 策略实现时调用
+/// Call a single member; record success/failure metadata to recorder
+/// Authoritative statistics: recorder.drain(), does not read UnifiedResponse.calls
+#[allow(dead_code)] // Called by P3-T02+ strategy implementations
 pub(crate) async fn call_member(
     member: &MemberHandle,
     req: &UnifiedRequest,
@@ -120,7 +120,7 @@ pub(crate) async fn call_member(
     match member.connector.complete(req, &member.egress).await {
         Ok(mut resp) => {
             let secs = start.elapsed().as_secs_f64();
-            // 更新第一条记录的 role 和延迟
+            // Update the role and latency on the first record
             if let Some(c) = resp.calls.first_mut() {
                 c.role = role;
                 c.latency_secs = secs;

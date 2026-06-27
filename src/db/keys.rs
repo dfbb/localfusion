@@ -2,7 +2,7 @@ use crate::crypto::sha256_hex;
 use crate::db::Db;
 use crate::error::FusionError;
 
-/// ingress_keys 表行结构体（不含 key_hash 明文）。
+/// Row struct for the ingress_keys table (does not include the key_hash plaintext).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct KeyRow {
     pub id: i64,
@@ -13,7 +13,7 @@ pub struct KeyRow {
 }
 
 impl Db {
-    /// 列出所有 ingress key（按 id 排序）。
+    /// List all ingress keys (ordered by id).
     pub async fn key_list(&self) -> Result<Vec<KeyRow>, FusionError> {
         let rows: Vec<(i64, Option<String>, i64, i64, i64)> = sqlx::query_as(
             "SELECT id, label, enabled, acl_all, created_at FROM ingress_keys ORDER BY id",
@@ -32,8 +32,8 @@ impl Db {
             .collect())
     }
 
-    /// 插入新 ingress key（存 SHA-256 哈希，不存明文）。
-    /// 返回新行的 id。
+    /// Insert a new ingress key (stores SHA-256 hash, not plaintext).
+    /// Returns the id of the new row.
     pub async fn key_insert(
         &self,
         plaintext: &str,
@@ -52,7 +52,7 @@ impl Db {
         Ok(r.last_insert_rowid())
     }
 
-    /// 更新 enabled 状态和 label（label 传 None 时保持原值）。
+    /// Update the enabled status and label (if label is None, the existing value is kept).
     pub async fn key_set_enabled_label(
         &self,
         id: i64,
@@ -70,7 +70,7 @@ impl Db {
         Ok(())
     }
 
-    /// 删除指定 ingress key（关联的 ACL 行会级联删除）。
+    /// Delete the specified ingress key (associated ACL rows are cascade-deleted).
     pub async fn key_delete(&self, id: i64) -> Result<(), FusionError> {
         sqlx::query("DELETE FROM ingress_keys WHERE id = ?")
             .bind(id)
@@ -79,8 +79,8 @@ impl Db {
         Ok(())
     }
 
-    /// 设置 ACL：acl_all=true 表示允许所有虚拟模型；否则使用 names 白名单。
-    /// 事务内完成：更新 acl_all 标志、清空旧白名单、写入新白名单。
+    /// Set ACL: acl_all=true means all virtual models are allowed; otherwise the names allowlist is used.
+    /// Completed within a transaction: updates the acl_all flag, clears the old allowlist, writes the new allowlist.
     pub async fn key_set_acl(
         &self,
         id: i64,
@@ -110,7 +110,7 @@ impl Db {
         Ok(())
     }
 
-    /// 获取指定 key 的 ACL 白名单虚拟模型名列表（按名称排序）。
+    /// Get the ACL allowlist of virtual model names for a given key (ordered by name).
     pub async fn key_acl_names(&self, id: i64) -> Result<Vec<String>, FusionError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT virtual_name FROM ingress_key_acl WHERE key_id = ? ORDER BY virtual_name",
@@ -121,8 +121,8 @@ impl Db {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// 鉴权：传入明文 key 和目标虚拟模型名，返回是否允许访问。
-    /// 规则：key 不存在 → false；disabled → false；acl_all=1 → true；否则查白名单。
+    /// Authorization: takes a plaintext key and a target virtual model name, returns whether access is allowed.
+    /// Rules: key not found → false; disabled → false; acl_all=1 → true; otherwise check the allowlist.
     pub async fn key_authorize(
         &self,
         plaintext: &str,
@@ -159,7 +159,7 @@ impl Db {
 mod tests {
     use crate::db::{models::ModelRow, virtual_models::VirtualModelRow, Db};
 
-    /// 辅助：插入一个模型和虚拟模型（用于 ACL 测试）。
+    /// Helper: insert a model and virtual model (used for ACL tests).
     async fn seed_vm(db: &Db, name: &str) {
         db.model_upsert(&ModelRow {
             id: "m".into(),
@@ -207,18 +207,18 @@ mod tests {
         seed_vm(&db, "vf").await;
         seed_vm(&db, "other").await;
         let id = db.key_insert("sk-1", None, 0).await.unwrap();
-        // 默认 acl_all=0，无白名单 → 拒绝
+        // default acl_all=0, no allowlist → denied
         assert!(!db.key_authorize("sk-1", "vf").await.unwrap());
-        // 加入白名单 vf → 允许 vf，拒绝 other
+        // add vf to allowlist → allow vf, deny other
         db.key_set_acl(id, false, &["vf".into()]).await.unwrap();
         assert!(db.key_authorize("sk-1", "vf").await.unwrap());
         assert!(!db.key_authorize("sk-1", "other").await.unwrap());
-        // acl_all=true → 允许所有
+        // acl_all=true → allow all
         db.key_set_acl(id, true, &[]).await.unwrap();
         assert!(db.key_authorize("sk-1", "other").await.unwrap());
-        // 错误 key → 拒绝
+        // wrong key → denied
         assert!(!db.key_authorize("sk-wrong", "vf").await.unwrap());
-        // disabled → 拒绝
+        // disabled → denied
         db.key_set_enabled_label(id, false, None).await.unwrap();
         assert!(!db.key_authorize("sk-1", "vf").await.unwrap());
     }
@@ -230,7 +230,7 @@ mod tests {
         let id = db.key_insert("sk-1", None, 0).await.unwrap();
         db.key_set_acl(id, false, &["vf".into()]).await.unwrap();
         assert_eq!(db.key_acl_names(id).await.unwrap(), vec!["vf"]);
-        // 删除虚拟模型后，ACL 行应级联删除
+        // after deleting the virtual model, ACL rows should be cascade-deleted
         db.vmodel_delete("vf").await.unwrap();
         assert!(db.key_acl_names(id).await.unwrap().is_empty());
     }

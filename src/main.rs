@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let db = Db::open(&cli.db).await?;
 
-    // 日志（先用 db 里的设置，无则默认）
+    // Logging (use settings from db first, fall back to defaults)
     let level = db
         .setting_get_or("log_level", "info")
         .await
@@ -53,17 +53,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         == "true";
     let log = Arc::new(localfusion::logging::init(&level, file.as_deref(), to_stdout));
 
-    // 冷启动引导（admin token 直接打印）
+    // Cold-start bootstrap (admin token printed directly)
     let enc_key = ensure_initialized(&db).await?;
 
     let inference_bind = db.setting_get_or("inference_bind", "127.0.0.1:8787").await?;
     let admin_bind = db.setting_get_or("admin_bind", "127.0.0.1:8788").await?;
 
-    // 探测后台(收到关闭信号时退出)
+    // Probe background task (exits when shutdown signal received)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     localfusion::probe::spawn_probe_loop(db.clone(), enc_key, 1800, shutdown_rx);
 
-    // 推理 server
+    // Inference server
     let inf_state = InferenceState {
         db: db.clone(),
         enc_key,
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/messages", post(messages))
         .with_state(inf_state);
 
-    // 管理 server
+    // Admin server
     let admin_app = admin::router(AdminState {
         db: db.clone(),
         log,
@@ -85,16 +85,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
     tracing::info!("inference on {inference_bind}, admin on {admin_bind}");
 
-    // 优雅关闭:SIGINT/SIGTERM 触发,两个 server 停止接收并放行在途请求,探测任务退出
+    // Graceful shutdown: triggered by SIGINT/SIGTERM; both servers stop accepting new requests,
+    // drain in-flight requests, and the probe task exits
     let inf = axum::serve(inf_listener, inf_app).with_graceful_shutdown(shutdown_signal());
     let adm = axum::serve(admin_listener, admin_app).with_graceful_shutdown(shutdown_signal());
     let result = tokio::try_join!(inf.into_future(), adm.into_future());
-    let _ = shutdown_tx.send(true); // 通知探测任务退出
+    let _ = shutdown_tx.send(true); // Notify probe task to exit
     result?;
     Ok(())
 }
 
-/// 等待 SIGINT(Ctrl-C) 或 SIGTERM;任一到达即返回,触发 graceful shutdown。
+/// Waits for SIGINT (Ctrl-C) or SIGTERM; returns when either arrives, triggering graceful shutdown.
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -115,5 +116,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {}
         _ = terminate => {}
     }
-    tracing::info!("收到关闭信号，开始优雅关闭");
+    tracing::info!("shutdown signal received, starting graceful shutdown");
 }

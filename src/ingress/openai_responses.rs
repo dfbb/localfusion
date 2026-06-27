@@ -1,11 +1,11 @@
-// P4-T03：OpenAI Responses API 入口翻译层
+// P4-T03: OpenAI Responses API ingress translation layer
 use serde_json::{json, Value};
 
 use crate::error::FusionError;
 use crate::unified::*;
 
-/// 解析 OpenAI Responses API 请求体
-/// `input` 可为 string（单条用户消息）或 array（多条消息对象）
+/// Parse an OpenAI Responses API request body.
+/// `input` may be a string (single user message) or an array (multiple message objects).
 pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
     let mut items = Vec::new();
     match body.get("input") {
@@ -23,7 +23,7 @@ pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
                     "tool" => Role::Tool,
                     _ => Role::User,
                 };
-                // content 可为数组（blocks）或字符串
+                // content may be an array (blocks) or a plain string
                 let text = it
                     .get("content")
                     .and_then(|c| c.as_array())
@@ -53,7 +53,7 @@ pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
     })
 }
 
-/// 从响应条目中提取第一条 assistant 文本
+/// Extract the first assistant text from a response.
 fn answer_text(resp: &UnifiedResponse) -> String {
     resp.items
         .iter()
@@ -72,7 +72,7 @@ fn answer_text(resp: &UnifiedResponse) -> String {
         .unwrap_or_default()
 }
 
-/// 格式化 OpenAI Responses API 响应体
+/// Format an OpenAI Responses API response body.
 pub fn format_response(resp: &UnifiedResponse) -> Value {
     json!({
         "id": "resp-localfusion",
@@ -92,12 +92,12 @@ pub fn format_response(resp: &UnifiedResponse) -> Value {
     })
 }
 
-/// 按 Responses 协议格式化错误体（非流式）
+/// Format an error body following the Responses protocol (non-streaming).
 pub fn format_error(message: &str) -> Value {
     json!({"error": {"message": message, "type": "invalid_request_error"}})
 }
 
-/// 将 UnifiedStreamEvent 映射为 Responses API SSE 事件 JSON 字符串列表
+/// Map a UnifiedStreamEvent to a list of Responses API SSE event JSON strings.
 pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {
     match ev {
         UnifiedStreamEvent::TextDelta { text } => {
@@ -122,7 +122,7 @@ pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {
     }
 }
 
-// ── 测试 ──────────────────────────────────────────────────────────────────────
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

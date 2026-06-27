@@ -6,11 +6,11 @@ use crate::error::FusionError;
 use crate::strategy::{make_strategy, MemberHandle, StrategyCtx, StrategyOutput};
 use crate::unified::{CallRecorder, StrategyTrace, UnifiedRequest};
 
-/// 测试用 mock 闭包类型别名
+/// Type alias for test mock closures
 #[cfg(test)]
 type MockFn = Box<dyn Fn(&str) -> MemberHandle + Send + Sync>;
 
-/// 模型解析器：把 model_id 解析成可调用的 MemberHandle（解密 key + connector + egress）
+/// Model resolver: parses a model_id into a callable MemberHandle (decrypt key + connector + egress)
 pub struct ModelResolver {
     db: Db,
     enc_key: [u8; 32],
@@ -20,7 +20,7 @@ pub struct ModelResolver {
 }
 
 impl ModelResolver {
-    /// 生产构造，使用真实 DB 和加密 key
+    /// Production constructor: uses a real DB and encryption key
     pub fn new(db: Db, enc_key: [u8; 32]) -> Self {
         ModelResolver {
             db,
@@ -31,7 +31,7 @@ impl ModelResolver {
         }
     }
 
-    /// 测试构造，注入 mock 闭包，跳过 DB + 解密
+    /// Test constructor: injects a mock closure, bypasses DB and decryption
     #[cfg(test)]
     pub fn with_mock(db: Db, f: impl Fn(&str) -> MemberHandle + Send + Sync + 'static) -> Self {
         ModelResolver {
@@ -42,7 +42,7 @@ impl ModelResolver {
         }
     }
 
-    /// 根据 model_id 解析出 MemberHandle；测试环境下优先使用 mock
+    /// Resolves a model_id into a MemberHandle; in test mode, the mock takes priority
     pub async fn resolve(&self, model_id: &str) -> Result<MemberHandle, FusionError> {
         #[cfg(test)]
         if let Some(f) = &self.mock {
@@ -55,7 +55,7 @@ impl ModelResolver {
         let kind = ConnectorKind::from_str(&m.connector)
             .map_err(|e| FusionError::InvalidRequest(e.to_string()))?;
 
-        // Anthropic 使用 x-api-key 头，其余使用 Bearer
+        // Anthropic uses x-api-key header; all others use Bearer
         let auth = match kind {
             ConnectorKind::Anthropic => AuthKind::XApiKey,
             _ => AuthKind::Bearer,
@@ -63,7 +63,7 @@ impl ModelResolver {
 
         let key = resolve_key(&m, &self.enc_key)?;
 
-        // 从 extra JSON 读取可选的 default_max_tokens
+        // Read optional default_max_tokens from extra JSON
         let default_max_tokens = m.extra.as_deref()
             .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
             .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
@@ -87,7 +87,7 @@ impl ModelResolver {
     }
 }
 
-/// Router：把虚拟模型名 → 策略执行 → StrategyOutput
+/// Router: maps a virtual model name → strategy execution → StrategyOutput
 pub struct Router {
     pub db: Db,
     pub resolver: ModelResolver,
@@ -101,7 +101,7 @@ impl Router {
         }
     }
 
-    /// 调度：解析虚拟模型 → 加载策略 → 解析成员列表 → 执行策略
+    /// Dispatch: resolve virtual model → load strategy → resolve member list → execute strategy
     pub async fn dispatch(
         &self,
         virtual_name: &str,

@@ -25,7 +25,7 @@ fn probe_request() -> UnifiedRequest {
     }
 }
 
-/// 对最近 stale_window_secs 内无样本的模型各发一次最小请求，记 is_probe=1 样本。
+/// Sends one minimal request to each model with no samples in the last stale_window_secs, recording is_probe=1 samples.
 pub async fn probe_once(
     db: &Db,
     resolver: &ModelResolver,
@@ -53,7 +53,7 @@ pub async fn probe_once(
     }
 }
 
-/// 后台循环（main 装配时 spawn）。收到 shutdown 信号(watch 变为 true)时退出。
+/// Background loop (spawned during main assembly). Exits when the shutdown signal is received (watch becomes true).
 pub fn spawn_probe_loop(
     db: Db,
     enc_key: [u8; 32],
@@ -70,7 +70,7 @@ pub fn spawn_probe_loop(
                 }
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
-                        tracing::info!("探测后台任务收到关闭信号，退出");
+                        tracing::info!("Probe background task received shutdown signal, exiting");
                         break;
                     }
                 }
@@ -113,11 +113,11 @@ mod tests {
         .await
         .unwrap();
         std::env::set_var("PROBE_KEY", "k");
-        // 旧样本让 m 进入 stale 列表
+        // old sample puts m into the stale list
         db.latency_insert("m", 1, 1.0, false, 1).await.unwrap();
         let resolver = ModelResolver::new(db.clone(), [0u8; 32]);
         probe_once(&db, &resolver, 100_000, 3600).await;
-        // 现在应有一条 is_probe=1 样本
+        // there should now be one is_probe=1 sample
         let n: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM latency_samples WHERE is_probe=1")
                 .fetch_one(&db.pool)

@@ -1,4 +1,4 @@
-// admin/api.rs — 管理 REST API 各端点路由实现
+// admin/api.rs — Admin REST API endpoint route implementations
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -24,7 +24,7 @@ async fn list_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
     }
     match s.db.model_list().await {
         Ok(mut rows) => {
-            // 屏蔽加密密钥明文（设计 §5.3）
+            // Mask encrypted API key plaintext (design §5.3)
             for m in &mut rows {
                 m.api_key_enc = m.api_key_enc.as_ref().map(|_| "***".into());
             }
@@ -34,7 +34,7 @@ async fn list_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
     }
 }
 
-/// body: { id, connector, base_url, api_key?(明文), api_key_env?, model, anthropic_version?, extra? }
+/// body: { id, connector, base_url, api_key?(plaintext), api_key_env?, model, anthropic_version?, extra? }
 async fn create_model(
     State(s): State<AdminState>,
     h: HeaderMap,
@@ -90,7 +90,7 @@ async fn upsert_from_body(
         .and_then(|v| v.as_str())
         .ok_or_else(|| FusionError::InvalidRequest("model required".into()))?
         .to_string();
-    // api_key 明文 → 加密；编辑时未提供则保留原值
+    // api_key plaintext → encrypted; if not provided during edit, retain the existing value
     let api_key_enc = match body.get("api_key").and_then(|v| v.as_str()) {
         Some(pt) if !pt.is_empty() => Some(crate::crypto::encrypt(&s.enc_key, pt)?),
         _ => s.db.model_get(&id).await?.and_then(|m| m.api_key_enc),
@@ -213,7 +213,7 @@ async fn upsert_vmodel(
         })
         .unwrap_or_default();
 
-    // 校验 members 对应的模型必须存在（设计 §6.3 fail-fast）
+    // Validate that member models must exist (design §6.3 fail-fast)
     for id in members.iter() {
         if s.db.model_get(id).await?.is_none() {
             return Err(FusionError::InvalidRequest(format!(
@@ -221,7 +221,7 @@ async fn upsert_vmodel(
             )));
         }
     }
-    // 校验 params 中引用的路由模型存在
+    // Validate that routed models referenced in params exist
     let params_val: Value = serde_json::from_str(&params).unwrap_or(Value::Null);
     for key in ["judge", "web_search", "image_generation", "tool_search", "image_query"] {
         if let Some(mid) = params_val.get(key).and_then(|v| v.as_str()) {
@@ -322,7 +322,7 @@ async fn list_keys(State(s): State<AdminState>, h: HeaderMap) -> Response {
     }
 }
 
-/// body: { label? }；返回明文一次（设计 §5.3）
+/// body: { label? }; returns plaintext once (design §5.3)
 async fn create_key(
     State(s): State<AdminState>,
     h: HeaderMap,
@@ -397,7 +397,7 @@ async fn set_acl(
     }
 }
 
-// 当前 Unix 秒
+// Current Unix seconds
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -405,7 +405,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-// ingress key：使用 CSPRNG 生成 24 字节随机熵（不可预测）
+// ingress key: generate 24 bytes of random entropy using CSPRNG (unpredictable)
 fn random_key() -> String {
     use base64::Engine;
     use rand::RngCore;
@@ -490,7 +490,7 @@ async fn stats_latency(
     if let Err(r) = require_admin(&s, &h).await {
         return r;
     }
-    // model 可选：指定则返回单模型，缺省则返回所有模型数组
+    // model optional: if specified returns single model, otherwise returns array of all models
     let models: Vec<String> = match q.get("model").filter(|m| !m.is_empty()) {
         Some(m) => vec![m.clone()],
         None => match s.db.model_list().await {
@@ -521,7 +521,7 @@ async fn stats_requests(State(s): State<AdminState>, h: HeaderMap) -> Response {
     if let Err(r) = require_admin(&s, &h).await {
         return r;
     }
-    // request_log 近 200 条（v1 全量，分页后续加）
+    // last 200 rows from request_log (v1 full scan, pagination to be added later)
     match sqlx::query_as::<
         _,
         (
@@ -571,7 +571,7 @@ pub fn playground_routes() -> Router<AdminState> {
     Router::new().route("/admin/api/playground", post(playground_handler))
 }
 
-/// body: { virtual_name, prompt? } — 简化版调试调用（无完整 trace 入库）
+/// body: { virtual_name, prompt? } — simplified debug call (no full trace written to DB)
 async fn playground_handler(
     State(s): State<AdminState>,
     headers: HeaderMap,
@@ -688,7 +688,7 @@ async fn get_logging(State(s): State<AdminState>, h: HeaderMap) -> Response {
 }
 
 /// body: { log_level?, log_file?, log_to_stdout? }
-/// log_level 热重载；log_file / log_to_stdout 写库，重启后生效
+/// log_level hot-reloaded; log_file / log_to_stdout written to DB, takes effect after restart
 async fn put_logging(
     State(s): State<AdminState>,
     h: HeaderMap,
@@ -716,7 +716,7 @@ async fn put_logging(
             return err_response(e);
         }
     }
-    Json(serde_json::json!({"ok": true, "note": "log_file/log_to_stdout 需重启生效"}))
+    Json(serde_json::json!({"ok": true, "note": "log_file/log_to_stdout requires restart to take effect"}))
         .into_response()
 }
 

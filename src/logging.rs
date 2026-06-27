@@ -44,12 +44,12 @@ pub fn init(level: &str, log_file: Option<&str>, to_stdout: bool) -> LogHandle {
                 .with_ansi(false),
         )
     });
-    // 使用 try_init 让测试中多次调用不 panic（第一次初始化全局 subscriber）
+    // Use try_init so multiple calls in tests don't panic (only the first call initializes the global subscriber)
     let _ = registry.with(stdout_layer).with(file_layer).try_init();
     LogHandle { reload }
 }
 
-/// 一次性把 admin token 直接打到 stdout，绝不经 tracing（设计 §3/§9）。
+/// Print the admin token directly to stdout exactly once, never through tracing (design §3/§9).
 pub fn print_admin_token_once(token: &str) {
     println!("\n=== LocalFusion admin token (save it, shown only once) ===\n{token}\n");
 }

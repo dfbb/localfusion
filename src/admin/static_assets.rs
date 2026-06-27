@@ -2,14 +2,14 @@ use axum::http::{header, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use rust_embed::RustEmbed;
 
-// dist 缺失时该目录可能为空——编译仍通过（RustEmbed 允许空目录）。
+// The dist directory may be empty when missing — compilation still succeeds (RustEmbed allows empty directories).
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
 struct Assets;
 
-const PLACEHOLDER: &str = "<h1>LocalFusion</h1><p>前端未构建（web/dist 为空）。请用 /admin/api 管理，或运行 pnpm build 后重新 cargo build。</p>";
+const PLACEHOLDER: &str = "<h1>LocalFusion</h1><p>Frontend not built (web/dist is empty). Use /admin/api to manage, or run pnpm build then cargo build.</p>";
 
-/// 静态资源 + SPA fallback：命中文件返回文件；否则返回 index.html（前端路由）；index 也缺失则占位页。
+/// Static assets + SPA fallback: serves the file if found; otherwise returns index.html (for frontend routing); shows a placeholder page if index is also missing.
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };

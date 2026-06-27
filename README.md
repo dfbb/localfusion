@@ -1,141 +1,142 @@
 # LocalFusion
 
-本地独立运行的多供应商 LLM 混合调度代理。单一 Rust 可执行文件，对外暴露 **OpenAI / OpenAI Responses / Anthropic** 三套兼容端点,对内按「虚拟模型 → 调度策略 → 真实模型组」扇出到多家供应商,并内置一个嵌入式 React 管理界面。
+A locally self-hosted multi-provider LLM routing proxy. A single Rust binary that exposes three compatible endpoint suites — **OpenAI / OpenAI Responses / Anthropic** — and internally fans out requests to multiple providers via a "virtual model → dispatch strategy → real model group" pipeline, with an embedded React admin UI.
 
-标准 SDK 零改动即可接入:把 `base_url` 指向 LocalFusion,把 `model` 填成你定义的「虚拟模型名」,剩下的路由、故障转移、合成、计费统计全部由 LocalFusion 负责。
-
----
-
-## 特性
-
-- **三套兼容入口**:OpenAI Chat Completions、OpenAI Responses、Anthropic Messages,均支持流式(SSE)与非流式。
-- **虚拟模型 + 6 种调度策略**:每个虚拟模型名绑定一种策略和一组真实后端模型。
-  - `failover` —— 故障转移:按顺序尝试,失败自动切下一个。
-  - `speed` —— 最快:按最近吞吐(tokens/s)选当前最快的成员。
-  - `cheapest` —— 最便宜:按价格表估算成本,选最低。
-  - `synthesize` —— 并行合成:并行调用所有成员,再由 judge 模型合成一份共识答案。
-  - `best-of-n` —— 选最优:并行收集后由 judge 选出最强一份并修复。
-  - `multimodal` —— 主模型 + 工具拦截回填:agentic loop,主模型的工具调用按能力路由表转发到后端执行并回填。
-- **全部配置存 SQLite**:没有 config 文件。模型、虚拟模型、密钥、ACL、价格、日志级别都在数据库里,可经管理 API / 前端热修改。
-- **嵌入式管理前端**:React + Vite + TanStack + shadcn,编译产物用 `rust-embed` 嵌进同一个二进制。提供模型管理、虚拟模型编排、密钥/ACL、监控面板、调试台(策略 trace 可视化)、日志设置。
-- **三维度用量统计**:按小时预聚合,`real`(真实模型)/ `virtual`(虚拟模型)/ `total`(全局)三个口径,token 与成本据 `CallRecorder` 统计(含失败调用),不依赖响应体。
-- **密钥安全**:provider key 用 ChaCha20-Poly1305(密钥经 HKDF-SHA256 从 machine-id 派生)加密落库;ingress key 与 admin token 仅存 SHA-256 哈希;admin token 仅首启打印一次,绝不写日志。
-- **单一可执行文件**:前端 + 后端 + 迁移全部打包,部署即一个二进制 + 一个 SQLite 文件。
+Drop-in compatible with standard SDKs: point `base_url` at LocalFusion, set `model` to your virtual model name, and LocalFusion handles all routing, failover, synthesis, and billing tracking.
 
 ---
 
-## 架构
+## Features
 
-三层正交,通过统一中间表示(`UnifiedRequest` / `UnifiedResponse` / `UnifiedStream`)解耦:
+- **Three compatible ingress endpoints**: OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages — all supporting both streaming (SSE) and non-streaming.
+- **Virtual models + 6 dispatch strategies**: each virtual model name is bound to one strategy and a set of real backend models.
+  - `failover` — tries members in order; automatically falls back to the next on failure.
+  - `speed` — selects the currently fastest member based on recent throughput (tokens/s).
+  - `cheapest` — estimates cost from the price table and selects the lowest-cost option.
+  - `synthesize` — parallel synthesis: calls all members concurrently, then uses a judge model to synthesize a consensus answer.
+  - `best-of-n` — parallel collection followed by a judge selecting and refining the best response.
+  - `multimodal` — primary model with tool-call interception and backfilling: an agentic loop that routes the primary model's tool calls to backends based on a capability routing table.
+- **All configuration stored in SQLite**: no config files. Models, virtual models, keys, ACLs, prices, and log levels live in the database and can be hot-modified via the admin API or UI.
+- **Embedded admin frontend**: React + Vite + TanStack + shadcn, compiled and embedded into the same binary via `rust-embed`. Includes model management, virtual model orchestration, key/ACL management, a monitoring dashboard, a debug playground (strategy trace visualization), and log settings.
+- **Three-dimensional usage statistics**: pre-aggregated by hour across three scopes — `real` (per real model), `virtual` (per virtual model), and `total` (global) — with token and cost counts recorded by `CallRecorder` (including failed calls), independent of response bodies.
+- **Key security**: provider keys are encrypted at rest with ChaCha20-Poly1305 (key derived from machine-id via HKDF-SHA256 with a random salt); ingress keys and the admin token are stored only as SHA-256 hashes; the admin token is printed once on first startup and never written to logs.
+- **Single binary**: frontend, backend, and migrations are all bundled together — deployment is one binary plus one SQLite file.
+
+---
+
+## Architecture
+
+Three orthogonal layers, decoupled through a unified intermediate representation (`UnifiedRequest` / `UnifiedResponse` / `UnifiedStream`):
 
 ```
-客户端 SDK
-   │  (OpenAI / Responses / Anthropic 协议)
+Client SDK
+   │  (OpenAI / Responses / Anthropic protocol)
    ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  入口 Ingress │ → │  策略 Strategy │ → │  出口 Connector│
-│  协议解析     │   │  虚拟模型扇出  │   │  调真实供应商  │
+│  Ingress     │ → │  Strategy    │ → │  Connector   │
+│  Protocol    │   │  Virtual     │   │  Real        │
+│  parsing     │   │  model fanout│   │  provider    │
 └──────────────┘   └──────────────┘   └──────────────┘
    │                      │                    │
-   │   鉴权(key+ACL)      │  Router 按         │  ChaCha20 解密 key
-   │                      │  strategy 分发     │  SSE 字节级安全切帧
+   │   Auth (key+ACL)     │  Router dispatches │  ChaCha20 key decryption
+   │                      │  by strategy       │  SSE byte-safe framing
    ▼                      ▼                    ▼
-            SQLite(配置 + 小时聚合统计 + 请求明细)
+            SQLite (config + hourly aggregated stats + request detail)
 ```
 
-- **入口层**只懂协议翻译,不知道下游是谁。
-- **策略层**只懂「怎么选/怎么合并成员」,不知道入口协议,也不知道出口怎么发 HTTP。
-- **出口层**只懂把统一请求翻译成某家供应商的真实 HTTP 调用,并把响应/SSE 翻译回来。
+- The **ingress layer** only understands protocol translation; it has no knowledge of downstream targets.
+- The **strategy layer** only understands how to select/merge members; it has no knowledge of the ingress protocol or how the connector makes HTTP calls.
+- The **connector layer** only understands how to translate a unified request into a real HTTP call for a specific provider, and translate the response/SSE back.
 
-进程内运行**两个** axum 服务:
+Two axum servers run in-process:
 
-| 服务 | 默认绑定 | 用途 |
+| Server | Default bind | Purpose |
 | --- | --- | --- |
-| 推理服务 | `127.0.0.1:8787` | 接受客户端 SDK 请求(三套兼容入口) |
-| 管理服务 | `127.0.0.1:8788` | 管理 REST API + 嵌入式前端,admin token 鉴权 |
+| Inference server | `127.0.0.1:8787` | Accepts client SDK requests (three compatible ingress endpoints) |
+| Admin server | `127.0.0.1:8788` | Admin REST API + embedded frontend, admin token auth |
 
 ---
 
-## 环境要求
+## Requirements
 
-- **Rust** 稳定版工具链(edition 2021),`cargo` 可用。
-- **Node.js** + **pnpm**(仅在需要构建/修改前端时)。仓库前端用 pnpm 管理(`web/pnpm-lock.yaml`)。
-- 运行时无需额外服务,SQLite 由 `sqlx` 内嵌驱动,数据库文件首次运行自动创建。
+- **Rust** stable toolchain (edition 2021) with `cargo` available.
+- **Node.js** + **pnpm** (only needed to build or modify the frontend). The frontend uses pnpm (`web/pnpm-lock.yaml`).
+- No external services required at runtime. SQLite is driven by the embedded `sqlx` driver; the database file is created automatically on first run.
 
 ---
 
-## 安装与构建
+## Installation & Build
 
-构建是两步串联:先编译前端产物到 `web/dist`,再 `cargo build` 把它嵌进二进制。
+Building is a two-step pipeline: first compile the frontend output to `web/dist`, then `cargo build` embeds it into the binary.
 
 ```bash
-# 1. 构建前端(产物输出到 web/dist)
+# 1. Build the frontend (output goes to web/dist)
 cd web
 pnpm install
 pnpm build
 cd ..
 
-# 2. 构建后端(rust-embed 嵌入 web/dist)
+# 2. Build the backend (rust-embed bundles web/dist)
 cargo build --release
 ```
 
-产物在 `target/release/localfusion`。
+The output binary is at `target/release/localfusion`.
 
-> **关于前端缺失**:`web/dist` 缺失时后端仍可编译(管理服务会返回一个占位页,提示先运行 `pnpm build`)。若只想跑后端核心、用 curl 管理,可跳过第 1 步。
+> **If the frontend is missing**: when `web/dist` is absent the backend still compiles (the admin server will return a placeholder page instructing you to run `pnpm build` first). If you only want to run the backend core and manage it via curl, you can skip step 1.
 
 ---
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 启动(数据库文件不存在会自动创建)
+# Start (database file is created automatically if it doesn't exist)
 ./target/release/localfusion --db ./localfusion.db
 ```
 
-首次启动时,控制台会**仅打印一次** admin token:
+On first startup, the console prints the admin token **exactly once**:
 
 ```
 === LocalFusion admin token (save it, shown only once) ===
 lfadm-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-**务必保存它**——它只在首启打印一次,之后只存哈希,无法找回。用它登录管理界面或调用管理 API。
+**Save it** — it is printed only on the very first startup. After that, only the hash is stored and it cannot be recovered. Use it to log in to the admin UI or call the admin API.
 
-启动后:
+After startup:
 
-- 管理界面:浏览器打开 `http://127.0.0.1:8788/`,用 admin token 登录。
-- 推理入口:`http://127.0.0.1:8787/v1/...`(见下)。
+- Admin UI: open `http://127.0.0.1:8788/` in your browser and log in with the admin token.
+- Inference endpoint: `http://127.0.0.1:8787/v1/...` (see below).
 
-### 命令行参数
+### CLI Arguments
 
-| 参数 | 默认值 | 说明 |
+| Argument | Default | Description |
 | --- | --- | --- |
-| `--db <PATH>` | `./localfusion.db` | SQLite 数据库文件路径,不存在则创建。 |
+| `--db <PATH>` | `./localfusion.db` | Path to the SQLite database file; created if it does not exist. |
 
-绑定地址(`inference_bind` / `admin_bind`)存在数据库的 settings 表,默认 `127.0.0.1:8787` 与 `127.0.0.1:8788`,可经管理 API 修改(改后需重启生效)。
+Bind addresses (`inference_bind` / `admin_bind`) are stored in the database settings table, defaulting to `127.0.0.1:8787` and `127.0.0.1:8788`. They can be changed via the admin API (restart required to take effect).
 
-### 优雅关闭
+### Graceful Shutdown
 
-进程收到 `SIGINT`(Ctrl-C)或 `SIGTERM` 时,两个服务停止接收新连接、放行在途请求,后台探测任务退出后干净结束。
-
----
-
-## 配置流程
-
-LocalFusion 无配置文件,所有配置经管理界面或管理 API 写入数据库。典型首配顺序:
-
-1. **添加真实模型**:登记上游供应商(connector 类型 = `chat` / `anthropic` / `responses`、base_url、密钥、模型名)。密钥可直填(加密落库)或填环境变量名。
-2. **创建虚拟模型**:起一个对外的虚拟模型名,选一种策略,挑选成员(真实模型),配置策略参数(如 synthesize/best-of-n 的 judge 模型)。
-3. **创建 ingress key**:生成客户端调用用的 API key(明文仅展示一次),并设置 ACL(允许全部虚拟模型,或指定白名单)。
-4. **(可选)配置价格表**:供 `cheapest` 策略估算成本、统计计费。
-
-之后客户端用 ingress key 调推理入口、`model` 填虚拟模型名即可。
+When the process receives `SIGINT` (Ctrl-C) or `SIGTERM`, both servers stop accepting new connections, allow in-flight requests to complete, and exit cleanly once background probe tasks have terminated.
 
 ---
 
-## 使用示例
+## Configuration Workflow
 
-假设你创建了一个虚拟模型 `my-router`,并生成了 ingress key `sk-lf-xxxx`。
+LocalFusion has no config file; all configuration is written to the database via the admin UI or admin API. Typical first-time setup order:
+
+1. **Add real models**: register upstream providers (connector type = `chat` / `anthropic` / `responses`, base_url, API key, model name). Keys can be entered directly (encrypted at rest) or as environment variable names.
+2. **Create virtual models**: define a virtual model name, choose a strategy, select member real models, and configure strategy parameters (e.g., the judge model for `synthesize`/`best-of-n`).
+3. **Create an ingress key**: generate an API key for client use (plaintext shown once), and configure its ACL (allow all virtual models, or specify a whitelist).
+4. **(Optional) Configure the price table**: used by the `cheapest` strategy for cost estimation and billing statistics.
+
+Clients then call the inference endpoint with the ingress key and the virtual model name as the `model` field.
+
+---
+
+## Usage Examples
+
+Assuming you have created a virtual model `my-router` and generated an ingress key `sk-lf-xxxx`.
 
 ### OpenAI Chat Completions
 
@@ -150,7 +151,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
   }'
 ```
 
-用官方 OpenAI SDK 时,只需把 `base_url` 指向 `http://127.0.0.1:8787/v1`、`api_key` 用 ingress key、`model` 用虚拟模型名。
+When using the official OpenAI SDK, simply set `base_url` to `http://127.0.0.1:8787/v1`, `api_key` to your ingress key, and `model` to your virtual model name.
 
 ### Anthropic Messages
 
@@ -174,97 +175,96 @@ curl http://127.0.0.1:8787/v1/responses \
   -d '{"model": "my-router", "input": "你好"}'
 ```
 
-三套入口都支持 `stream: true` 的 SSE 流式输出,错误响应按各自协议格式返回。
+All three endpoints support `stream: true` SSE streaming output. Error responses follow each protocol's respective format.
 
 ---
 
-## API 参考
+## API Reference
 
-### 推理入口(端口 8787,ingress key 鉴权)
+### Inference Endpoints (port 8787, ingress key auth)
 
-鉴权:`Authorization: Bearer <ingress-key>` 或 `x-api-key: <ingress-key>`。
+Auth: `Authorization: Bearer <ingress-key>` or `x-api-key: <ingress-key>`.
 
-| 方法 | 路径 | 协议 |
+| Method | Path | Protocol |
 | --- | --- | --- |
 | POST | `/v1/chat/completions` | OpenAI Chat Completions |
 | POST | `/v1/responses` | OpenAI Responses |
 | POST | `/v1/messages` | Anthropic Messages |
 
-### 管理 API(端口 8788,admin token 鉴权)
+### Admin API (port 8788, admin token auth)
 
-鉴权:`Authorization: Bearer <admin-token>`。
+Auth: `Authorization: Bearer <admin-token>`.
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 | --- | --- | --- |
-| GET | `/admin/api/health` | 鉴权探活 |
-| GET / POST | `/admin/api/models` | 列出 / 新增真实模型 |
-| PUT / DELETE | `/admin/api/models/:id` | 修改 / 删除真实模型(删除前做引用检查) |
-| GET / POST | `/admin/api/virtual-models` | 列出 / 新增虚拟模型 |
-| PUT / DELETE | `/admin/api/virtual-models/:name` | 修改 / 删除虚拟模型 |
-| GET | `/admin/api/strategies` | 列出策略及其参数 schema |
-| GET / POST | `/admin/api/keys` | 列出 / 新增 ingress key(明文仅返回一次) |
-| PATCH / DELETE | `/admin/api/keys/:id` | 启用停用/改标签 / 删除 |
-| PUT | `/admin/api/keys/:id/acl` | 设置 key 的 ACL(全部或白名单) |
-| GET | `/admin/api/stats/usage` | 小时聚合用量(可按 scope/name/时间范围筛选) |
-| GET | `/admin/api/stats/usage/summary` | 用量合计 |
-| GET | `/admin/api/stats/prices` | 价格表 |
-| GET | `/admin/api/stats/latency` | 各模型最近吞吐(tokens/s) |
-| GET | `/admin/api/stats/requests` | 逐条请求明细 |
-| POST | `/admin/api/playground` | 调试台:跑一次虚拟模型并返回完整策略 trace |
-| GET / PUT | `/admin/api/settings/logging` | 日志级别(热重载)/文件/stdout 设置 |
+| GET | `/admin/api/health` | Authenticated health check |
+| GET / POST | `/admin/api/models` | List / create real models |
+| PUT / DELETE | `/admin/api/models/:id` | Update / delete real model (reference check before deletion) |
+| GET / POST | `/admin/api/virtual-models` | List / create virtual models |
+| PUT / DELETE | `/admin/api/virtual-models/:name` | Update / delete virtual model |
+| GET | `/admin/api/strategies` | List strategies and their parameter schemas |
+| GET / POST | `/admin/api/keys` | List / create ingress keys (plaintext returned once only) |
+| PATCH / DELETE | `/admin/api/keys/:id` | Enable/disable, rename, or delete a key |
+| PUT | `/admin/api/keys/:id/acl` | Set key ACL (all virtual models or a whitelist) |
+| GET | `/admin/api/stats/usage` | Hourly aggregated usage (filterable by scope/name/time range) |
+| GET | `/admin/api/stats/usage/summary` | Usage totals |
+| GET | `/admin/api/stats/prices` | Price table |
+| GET | `/admin/api/stats/latency` | Recent throughput (tokens/s) per model |
+| GET | `/admin/api/stats/requests` | Per-request detail log |
+| POST | `/admin/api/playground` | Debug playground: run a virtual model and return the full strategy trace |
+| GET / PUT | `/admin/api/settings/logging` | Log level (hot-reload) / file / stdout settings |
 
-> 时间戳约定:管理 API 的时间字段为 **Unix 秒**。
-
----
-
-## 管理界面
-
-浏览器访问管理端口(默认 `http://127.0.0.1:8788/`),用 admin token 登录。包含:
-
-- **真实模型**:增删改上游模型与密钥。
-- **虚拟模型**:选策略、编排成员(支持上下移)、动态策略参数表单。
-- **密钥 / ACL**:生成 ingress key(明文一次性展示)、启停、设置可访问的虚拟模型范围。
-- **监控面板**:总用量 / 趋势折线 / 模型排行 / 延迟 / 价格 / 请求明细。
-- **调试台 (Playground)**:对某个虚拟模型发一次请求,可视化策略编排过程(成员答案、judge 输入输出、候选对比、尝试链、multimodal 轮次时间线)。
-- **设置**:日志级别(保存即热重载)、日志文件、stdout 开关。
+> Timestamp convention: time fields in the admin API are **Unix seconds**.
 
 ---
 
-## 开发
+## Admin UI
+
+Open the admin port in your browser (default `http://127.0.0.1:8788/`) and log in with the admin token. Sections include:
+
+- **Real Models**: add, edit, and delete upstream models and keys.
+- **Virtual Models**: choose a strategy, arrange members (drag to reorder), and configure dynamic strategy parameter forms.
+- **Keys / ACL**: generate ingress keys (plaintext shown once), enable/disable, and set the accessible virtual model scope.
+- **Monitoring Dashboard**: total usage, trend charts, model rankings, latency, prices, and request detail.
+- **Debug Playground**: send a single request to a virtual model and visualize the full orchestration process (member answers, judge input/output, candidate comparison, attempt chains, multimodal round timeline).
+- **Settings**: log level (saved with immediate hot-reload), log file path, and stdout toggle.
+
+---
+
+## Development
 
 ```bash
-# 后端测试(单元 + 集成 + e2e)
+# Backend tests (unit + integration + e2e)
 cargo test
 
 # Lint
 cargo clippy --all-targets
 
-# 前端开发态(Vite dev server,默认 :5173)
+# Frontend dev mode (Vite dev server, default :5173)
 cd web && pnpm dev
 ```
 
-前端开发态运行在另一个 localhost 端口,管理服务已配置 CORS **仅放行 localhost / 127.0.0.1 来源**,因此 dev server 可直接调 `:8788` 的管理 API。
+The frontend dev server runs on a separate localhost port. The admin server is configured to allow CORS **only from localhost / 127.0.0.1 origins**, so the dev server can call the `:8788` admin API directly.
 
-后端测试使用 `wiremock` 起假上游,验证端到端路由、协议翻译、SSE 切帧与统计落库等真实行为。
-
----
-
-## 安全说明
-
-LocalFusion 的设计定位是**本地单机单用户工具**(默认仅绑定 `127.0.0.1`)。已落实的安全措施:
-
-- provider key 用 ChaCha20-Poly1305 加密落库(密钥经 HKDF-SHA256 从 machine-id 派生,salt 随机)。
-- ingress key 与 admin token 仅存 SHA-256 哈希;明文 ingress key 仅在创建时返回一次。
-- admin token 仅首启 `println!` 打印一次,绝不写入日志。
-- 所有 SQL 参数化,无字符串拼接。
-- 推理入口经 key + ACL 鉴权;管理 API 每个端点经 admin token 鉴权。
-- 上游错误体截断脱敏后再返回,SSE 出口缓冲有上限,防止异常上游撑爆内存。
-
-> 若要暴露到非 `127.0.0.1` 的地址(改 `inference_bind` / `admin_bind`),请自行评估网络层防护——该工具未针对公网多租户场景加固。
+Backend tests use `wiremock` to spin up fake upstream servers, verifying real end-to-end behavior including routing, protocol translation, SSE framing, and stats persistence.
 
 ---
 
-## 许可证
+## Security Notes
 
-本项目采用 [Apache License 2.0](LICENSE) 授权。
+LocalFusion is designed as a **local single-user tool** (binds to `127.0.0.1` by default). Security measures in place:
 
+- Provider keys are encrypted at rest with ChaCha20-Poly1305 (key derived from machine-id via HKDF-SHA256 with a random salt).
+- Ingress keys and the admin token are stored only as SHA-256 hashes; plaintext ingress keys are returned only at creation time.
+- The admin token is printed via `println!` only on first startup and is never written to logs.
+- All SQL uses parameterized queries; no string concatenation.
+- The inference endpoint requires key + ACL auth; every admin API endpoint requires admin token auth.
+- Upstream error bodies are truncated and sanitized before being returned; the SSE output buffer is capped to prevent a misbehaving upstream from exhausting memory.
+
+> If you expose LocalFusion on an address other than `127.0.0.1` (by changing `inference_bind` / `admin_bind`), you are responsible for evaluating your network-layer security — this tool has not been hardened for public multi-tenant deployments.
+
+---
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).

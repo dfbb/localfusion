@@ -1,5 +1,5 @@
-//! OpenAI Chat Completions 出口连接器
-//! 覆盖：请求构建、非流式响应解析、SSE 翻译
+//! OpenAI Chat Completions egress connector
+//! Covers: request building, non-streaming response parsing, SSE translation
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -11,9 +11,9 @@ use crate::unified::{
     UnifiedResponse, UnifiedStream, UnifiedStreamEvent, Usage,
 };
 
-// ── 请求构建 ──────────────────────────────────────────────────────────────────
+// ── Request Building ──────────────────────────────────────────────────────────
 
-/// 将 UnifiedRequest 转换为 OpenAI Chat Completions 请求体 JSON
+/// Convert a UnifiedRequest into an OpenAI Chat Completions request body JSON
 pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value {
     let mut messages: Vec<Value> = Vec::new();
 
@@ -26,7 +26,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
                     Role::Assistant => "assistant",
                     Role::Tool => "tool",
                 };
-                // 将多个 ContentBlock::Text 拼接为单一字符串（忽略 Image）
+                // Concatenate multiple ContentBlock::Text into a single string (ignore Image)
                 let text: String = content
                     .iter()
                     .filter_map(|c| match c {
@@ -37,7 +37,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
                 messages.push(json!({"role": role_s, "content": text}));
             }
             Item::ToolCall { id, name, args } => {
-                // 助手发起的工具调用
+                // Tool call initiated by the assistant
                 messages.push(json!({
                     "role": "assistant",
                     "tool_calls": [{
@@ -48,7 +48,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
                 }));
             }
             Item::ToolResult { id, content } => {
-                // 工具返回结果
+                // Tool return result
                 let text: String = content
                     .iter()
                     .filter_map(|c| match c {
@@ -58,7 +58,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
                     .collect();
                 messages.push(json!({"role": "tool", "tool_call_id": id, "content": text}));
             }
-            // Reasoning 块不映射到 OpenAI messages
+            // Reasoning blocks do not map to OpenAI messages
             Item::Reasoning { .. } => {}
         }
     }
@@ -69,7 +69,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
         "stream": req.stream,
     });
 
-    // max_tokens：优先取请求字段，其次取 ctx 默认值
+    // max_tokens: prefer request field, fall back to ctx default
     if let Some(mt) = req.max_tokens.or(ctx.default_max_tokens) {
         body["max_tokens"] = json!(mt);
     }
@@ -77,7 +77,7 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
         body["temperature"] = json!(t);
     }
 
-    // 将自定义工具定义转换为 OpenAI function calling 格式（跳过内置工具）
+    // Convert custom tool definitions to OpenAI function calling format (skip built-in tools)
     let tools: Vec<Value> = req
         .tools
         .iter()
@@ -100,9 +100,9 @@ pub(super) fn build_chat_request(req: &UnifiedRequest, ctx: &EgressCtx) -> Value
     body
 }
 
-// ── 非流式响应解析 ────────────────────────────────────────────────────────────
+// ── Non-Streaming Response Parsing ────────────────────────────────────────────
 
-/// 解析 OpenAI Chat Completions 非流式响应 JSON，返回 UnifiedResponse
+/// Parse an OpenAI Chat Completions non-streaming response JSON, returning a UnifiedResponse
 pub(super) fn parse_chat_response(json: &Value, model_id: &str) -> UnifiedResponse {
     let text = json
         .pointer("/choices/0/message/content")
@@ -144,16 +144,16 @@ pub(super) fn parse_chat_response(json: &Value, model_id: &str) -> UnifiedRespon
     }
 }
 
-// ── SSE 翻译器 ────────────────────────────────────────────────────────────────
+// ── SSE Translator ────────────────────────────────────────────────────────────
 
-/// OpenAI Chat Completions SSE 流翻译状态机
+/// OpenAI Chat Completions SSE stream translation state machine
 pub(super) struct ChatSseState {
     model_id: String,
-    /// 累积的文本内容（用于 usage 估算）
+    /// Accumulated text content (used for usage estimation)
     text: String,
     input_tokens: u64,
     output_tokens: u64,
-    /// 是否收到过 usage 字段（stream_options.include_usage=true 时）
+    /// Whether a usage field has been received (when stream_options.include_usage=true)
     has_usage: bool,
     finish_reason: Option<String>,
 }
@@ -173,12 +173,12 @@ impl ChatSseState {
 
 impl SseTranslator for ChatSseState {
     fn push(&mut self, chunk: &Value) -> Result<Vec<UnifiedStreamEvent>, ConnError> {
-        // 上游返回错误对象时立即终止
+        // Immediately terminate when the upstream returns an error object
         if let Some(err) = chunk.get("error") {
             return Err(ConnError::HardFail(format!("upstream sse error: {err}")));
         }
 
-        // 解析 usage（stream_options.include_usage=true 时出现在最后一个 chunk）
+        // Parse usage (appears in the last chunk when stream_options.include_usage=true)
         if let Some(u) = chunk.get("usage") {
             if !u.is_null() {
                 self.input_tokens = u
@@ -193,7 +193,7 @@ impl SseTranslator for ChatSseState {
             }
         }
 
-        // 记录 finish_reason
+        // Record finish_reason
         if let Some(fr) = chunk
             .pointer("/choices/0/finish_reason")
             .and_then(|v| v.as_str())
@@ -203,7 +203,7 @@ impl SseTranslator for ChatSseState {
             }
         }
 
-        // 提取 delta.content 文本增量
+        // Extract delta.content text delta
         let mut out = Vec::new();
         if let Some(c) = chunk
             .pointer("/choices/0/delta/content")
@@ -218,10 +218,10 @@ impl SseTranslator for ChatSseState {
         Ok(out)
     }
 
-    /// 流结束时产出 Done 事件，携带 usage 和 ModelUsage（供统计）
+    /// Emit a Done event at stream end, carrying usage and ModelUsage (for statistics)
     fn finish(&mut self) -> Vec<UnifiedStreamEvent> {
         let estimated = !self.has_usage;
-        // 若无 usage 字段则按字符数粗估（每4字符约1个 token）
+        // If no usage field, estimate roughly from character count (approx 1 token per 4 chars)
         let out_tokens = if self.has_usage {
             self.output_tokens
         } else {
@@ -251,13 +251,13 @@ impl SseTranslator for ChatSseState {
     }
 }
 
-// ── Connector 实现 ────────────────────────────────────────────────────────────
+// ── Connector Implementation ──────────────────────────────────────────────────
 
 pub struct ChatConnector;
 
 #[async_trait]
 impl Connector for ChatConnector {
-    /// 非流式补全：发送请求并解析 JSON 响应
+    /// Non-streaming completion: send request and parse JSON response
     async fn complete(
         &self,
         req: &UnifiedRequest,
@@ -292,7 +292,7 @@ impl Connector for ChatConnector {
         Ok(parse_chat_response(&json, &ctx.model))
     }
 
-    /// 流式补全：发送 SSE 请求，使用 ChatSseState 翻译事件
+    /// Streaming completion: send SSE request, translate events using ChatSseState
     async fn stream(
         &self,
         req: &UnifiedRequest,
@@ -300,7 +300,7 @@ impl Connector for ChatConnector {
     ) -> Result<UnifiedStream, ConnError> {
         let mut body = build_chat_request(req, ctx);
         body["stream"] = json!(true);
-        // 要求上游在最后一个 chunk 包含 usage 统计
+        // Request that the upstream include usage stats in the last chunk
         body["stream_options"] = json!({"include_usage": true});
 
         let url = egress_url(&ctx.base_url, ConnectorKind::Chat);
@@ -318,7 +318,7 @@ impl Connector for ChatConnector {
     }
 }
 
-// ── 单元测试 ──────────────────────────────────────────────────────────────────
+// ── Unit Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

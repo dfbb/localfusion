@@ -8,7 +8,7 @@ use crate::unified::CallRole;
 
 pub struct BestOfN;
 
-/// 构建选优 prompt：把问题和各候选答案拼成让 judge 选最优并修复的指令
+/// Build the selection prompt: combine the question and candidate answers into an instruction for the judge to pick the best and fix its flaws
 fn selection_prompt(question: &str, answers: &[(String, String)]) -> String {
     let mut p = format!("Question:\n{question}\n\nCandidate solutions:\n");
     for (i, (model, ans)) in answers.iter().enumerate() {
@@ -28,12 +28,12 @@ impl Strategy for BestOfN {
         "best-of-n"
     }
 
-    /// 执行 best-of-n 策略：
-    /// 1. 并行调用所有成员，收集候选答案
-    /// 2. 调用 judge 从候选中选出最优并修复
-    /// 始终返回 Full（非流式）
+    /// Execute the best-of-n strategy:
+    /// 1. Call all members in parallel and collect candidate answers
+    /// 2. Call the judge to select the best candidate and fix its flaws
+    /// Always returns Full (non-streaming)
     async fn execute(&self, ctx: StrategyCtx<'_>) -> Result<StrategyOutput, FusionError> {
-        // 读取必填的 judge 参数
+        // Read the required judge parameter
         let judge_id = ctx
             .params
             .get("judge")
@@ -42,14 +42,14 @@ impl Strategy for BestOfN {
                 FusionError::StrategyError("best-of-n requires params.judge".into())
             })?;
 
-        // 并行向所有成员发请求
+        // Send requests to all members in parallel
         let futs = ctx
             .members
             .iter()
             .map(|m| call_member(m, &ctx.req, CallRole::Member, ctx.recorder));
         let results = join_all(futs).await;
 
-        // 收集成功的候选答案，同时写入 trace
+        // Collect successful candidate answers and write them into the trace
         let mut answers: Vec<(String, String)> = Vec::new();
         for (m, r) in ctx.members.iter().zip(results) {
             if let Ok(resp) = r {
@@ -64,14 +64,14 @@ impl Strategy for BestOfN {
             }
         }
 
-        // 没有任何有效候选直接报错
+        // Return an error if no valid candidates were collected
         if answers.is_empty() {
             return Err(FusionError::AllMembersFailed(
                 "best-of-n: no candidates".into(),
             ));
         }
 
-        // 写入 diversity 状态
+        // Write diversity status into the trace
         if let Some(t) = ctx.trace {
             let status = if answers.len() >= ctx.members.len() {
                 "full"
@@ -81,20 +81,20 @@ impl Strategy for BestOfN {
             t.set_status(status);
         }
 
-        // 解析 judge 成员，构建选优 prompt 并发起调用
+        // Resolve the judge member, build the selection prompt, and make the call
         let judge_member = ctx.resolver.resolve(judge_id).await?;
         let prompt = selection_prompt(&question_text(&ctx.req), &answers);
         let judge_req = make_text_request(&prompt, ctx.req.max_tokens);
         let judge_resp =
             call_member(&judge_member, &judge_req, CallRole::Judge, ctx.recorder).await?;
 
-        // 把 judge 调用写入 trace
+        // Write the judge call into the trace
         if let Some(t) = ctx.trace {
             let u = judge_resp.calls.first().cloned().unwrap();
             t.set_judge(&prompt, &answer_text_pub(&judge_resp), &u);
         }
 
-        // best-of-n 始终返回 Full（非流式）
+        // best-of-n always returns Full (non-streaming)
         Ok(StrategyOutput::Full(judge_resp))
     }
 }

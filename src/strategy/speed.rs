@@ -43,8 +43,8 @@ mod tests {
     #[tokio::test]
     async fn picks_highest_throughput_member() {
         let db = Db::open_memory().await.unwrap();
-        db.latency_insert("a", 10, 1.0, false, 1).await.unwrap(); // 吞吐 10
-        db.latency_insert("b", 30, 1.0, false, 2).await.unwrap(); // 吞吐 30
+        db.latency_insert("a", 10, 1.0, false, 1).await.unwrap(); // throughput 10
+        db.latency_insert("b", 30, 1.0, false, 2).await.unwrap(); // throughput 30
         let resolver = crate::router::ModelResolver::new(db.clone(), [0u8;32]);
         let recorder = CallRecorder::default();
         let members = vec![
