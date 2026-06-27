@@ -126,10 +126,6 @@ build_target() {
 # macOS Apple Silicon
 build_target "aarch64-apple-darwin"  "macos-arm64"  "localfusion"
 
-# macOS Intel (add target if not installed)
-rustup target add x86_64-apple-darwin 2>/dev/null || true
-build_target "x86_64-apple-darwin"   "macos-x86_64" "localfusion"
-
 # Linux x86_64 (requires cross or a Linux toolchain)
 rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
 build_target "x86_64-unknown-linux-musl" "linux-x86_64" "localfusion"
