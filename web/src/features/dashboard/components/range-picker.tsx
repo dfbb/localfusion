@@ -7,8 +7,8 @@ import { Input } from '@/components/ui/input'
 export type Granularity = 'hour' | 'day' | 'week'
 
 export interface DateRange {
-  from: string // ISO
-  to: string   // ISO
+  from: number // Unix 秒
+  to: number   // Unix 秒
   granularity: Granularity
 }
 
@@ -23,6 +23,8 @@ const PRESETS: { label: string; hours: number; granularity: Granularity }[] = [
   { label: '近 30 天', hours: 24 * 30, granularity: 'week' },
 ]
 
+const toSecs = (d: Date) => Math.floor(d.getTime() / 1000)
+
 export function RangePicker({ value, onChange }: Props) {
   const [custom, setCustom] = useState(false)
 
@@ -31,22 +33,22 @@ export function RangePicker({ value, onChange }: Props) {
     const from = hours <= 24 ? subHours(to, hours) : subDays(to, hours / 24)
     setCustom(false)
     onChange({
-      from: from.toISOString(),
-      to: to.toISOString(),
+      from: toSecs(from),
+      to: toSecs(to),
       granularity,
     })
   }
 
   function handleCustomFrom(e: React.ChangeEvent<HTMLInputElement>) {
-    onChange({ ...value, from: new Date(e.target.value).toISOString() })
+    onChange({ ...value, from: toSecs(new Date(e.target.value)) })
   }
 
   function handleCustomTo(e: React.ChangeEvent<HTMLInputElement>) {
-    onChange({ ...value, to: new Date(e.target.value).toISOString() })
+    onChange({ ...value, to: toSecs(new Date(e.target.value)) })
   }
 
-  function toLocalDatetime(iso: string) {
-    const d = new Date(iso)
+  function toLocalDatetime(secs: number) {
+    const d = new Date(secs * 1000)
     return format(d, "yyyy-MM-dd'T'HH:mm")
   }
 

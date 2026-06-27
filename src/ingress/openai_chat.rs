@@ -89,6 +89,11 @@ pub fn format_response(resp: &UnifiedResponse) -> Value {
     })
 }
 
+/// 按 OpenAI 协议格式化错误体（非流式）
+pub fn format_error(message: &str) -> Value {
+    json!({"error": {"message": message, "type": "invalid_request_error"}})
+}
+
 /// 将 UnifiedStreamEvent 转换为 OpenAI SSE 事件字符串列表
 pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {
     match ev {

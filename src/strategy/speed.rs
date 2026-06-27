@@ -10,6 +10,9 @@ pub struct Speed;
 impl Strategy for Speed {
     fn name(&self) -> &str { "speed" }
     async fn execute(&self, ctx: StrategyCtx<'_>) -> Result<StrategyOutput, FusionError> {
+        if ctx.members.is_empty() {
+            return Err(FusionError::StrategyError("speed: no members".into()));
+        }
         let explore = ctx.params.get("explore").and_then(|v| v.as_bool()).unwrap_or(true);
         let mut best_idx = 0usize;
         let mut best_score = f64::MIN;

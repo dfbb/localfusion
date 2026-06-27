@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -44,6 +44,7 @@ const defaultValues: ModelForm = {
 export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const isEdit = !!currentRow
   const qc = useQueryClient()
+  const [keyMode, setKeyMode] = useState<'direct' | 'env'>('direct')
 
   const {
     register,
@@ -71,8 +72,11 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           anthropic_version: currentRow.anthropic_version ?? '',
           extra: currentRow.extra ?? '',
         })
+        // 直填密钥的模型(api_key_enc 有值)即便 reset 清空 api_key 也应保持「直填」模式
+        setKeyMode(currentRow.api_key_enc ? 'direct' : currentRow.api_key_env ? 'env' : 'direct')
       } else {
         reset(defaultValues)
+        setKeyMode('direct')
       }
     }
   }, [open, currentRow, reset])
@@ -89,7 +93,6 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   })
 
   const connector = watch('connector')
-  const keyMode = watch('api_key') ? 'direct' : 'env'
 
   function onSubmit(v: ModelForm) {
     // Strip empty optional fields
@@ -211,6 +214,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
               <RadioGroupPrimitive.Root
                 value={keyMode}
                 onValueChange={(v) => {
+                  setKeyMode(v as 'direct' | 'env')
                   if (v === 'direct') setValue('api_key_env', '')
                   else setValue('api_key', '')
                 }}

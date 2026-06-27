@@ -56,10 +56,18 @@ fn sse_lines(proto: Proto, ev: &UnifiedStreamEvent) -> Vec<String> {
     }
 }
 
+fn format_err_body(proto: Proto, message: &str) -> Value {
+    match proto {
+        Proto::Chat => openai_chat::format_error(message),
+        Proto::Responses => openai_responses::format_error(message),
+        Proto::Anthropic => anthropic::format_error(message),
+    }
+}
+
 pub async fn handle(state: InferenceState, proto: Proto, headers: HeaderMap, body: Value) -> Response {
     let model = match body.get("model").and_then(|v| v.as_str()) {
         Some(m) => m.to_string(),
-        None => return err(FusionError::InvalidRequest("model required".into())),
+        None => return err(proto, FusionError::InvalidRequest("model required".into())),
     };
     if let Err(e) = crate::auth::authorize_ingress(&state.db, &headers, &model).await {
         let code = if matches!(e, FusionError::Unauthorized(_)) {
@@ -67,11 +75,11 @@ pub async fn handle(state: InferenceState, proto: Proto, headers: HeaderMap, bod
         } else {
             StatusCode::FORBIDDEN
         };
-        return (code, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+        return (code, Json(format_err_body(proto, &e.to_string()))).into_response();
     }
     let req = match parse(proto, &body) {
         Ok(r) => r,
-        Err(e) => return err(e),
+        Err(e) => return err(proto, e),
     };
     let want_stream = req.stream;
 
@@ -103,14 +111,14 @@ pub async fn handle(state: InferenceState, proto: Proto, headers: HeaderMap, bod
             // 错误路径也写统计（drain 已发生调用）
             let calls = recorder.drain();
             let _ = write_stats(&state.db, &model, &strategy, &calls, true, now_secs()).await;
-            err(e)
+            err(proto, e)
         }
     }
 }
 
-fn err(e: FusionError) -> Response {
+fn err(proto: Proto, e: FusionError) -> Response {
     let code = StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (code, Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    (code, Json(format_err_body(proto, &e.to_string()))).into_response()
 }
 
 /// panel/multimodal 的 Full → 伪流 SSE（统计已在 finalize_full 落库）。
@@ -177,7 +185,14 @@ fn stream_real(
                         yield Ok::<_, std::convert::Infallible>(Event::default().data(l));
                     }
                 }
-                Err(e) => { failed = true; yield Ok(Event::default().data(format!("{{\"error\":\"{e}\"}}"))); break; }
+                Err(e) => {
+                    failed = true;
+                    let ev = UnifiedStreamEvent::Error { message: e.to_string(), call: None };
+                    for l in sse_lines(proto, &ev) {
+                        yield Ok::<_, std::convert::Infallible>(Event::default().data(l));
+                    }
+                    break;
+                }
             }
         }
         // 合并 recorder 暂存的失败尝试 + 尾用量，写统计

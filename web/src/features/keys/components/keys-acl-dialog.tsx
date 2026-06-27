@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { type KeyRow } from '../data/schema'
 
-type VirtualModel = { id: string; name: string }
+type VirtualModel = { name: string }
 
 type Props = {
   open: boolean
@@ -97,12 +97,12 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
               ) : (
                 vmodels.map((vm) => (
                   <LabelPrimitive.Root
-                    key={vm.id}
+                    key={vm.name}
                     className="flex items-center gap-2 cursor-pointer"
-                    htmlFor={`acl-vm-${vm.id}`}
+                    htmlFor={`acl-vm-${vm.name}`}
                   >
                     <Checkbox
-                      id={`acl-vm-${vm.id}`}
+                      id={`acl-vm-${vm.name}`}
                       checked={selected.includes(vm.name)}
                       onCheckedChange={() => toggleModel(vm.name)}
                     />

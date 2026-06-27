@@ -92,6 +92,11 @@ pub fn format_response(resp: &UnifiedResponse) -> Value {
     })
 }
 
+/// 按 Responses 协议格式化错误体（非流式）
+pub fn format_error(message: &str) -> Value {
+    json!({"error": {"message": message, "type": "invalid_request_error"}})
+}
+
 /// 将 UnifiedStreamEvent 映射为 Responses API SSE 事件 JSON 字符串列表
 pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {
     match ev {
