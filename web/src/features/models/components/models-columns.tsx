@@ -9,6 +9,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { type ModelRow } from '../data/schema'
 import { useModels } from './models-provider'
 
@@ -22,23 +28,30 @@ function StatusCell({ modelId }: { modelId: string }) {
   if (!result) {
     return <span className="text-muted-foreground text-sm">—</span>
   }
-  if (result.ok) {
-    return (
-      <span className="text-green-600 dark:text-green-400 text-sm font-mono">
-        ✓ {result.latency_ms}ms
-      </span>
-    )
-  }
-  const short = result.error.length > 12
-    ? result.error.slice(0, 12) + '…'
+
+  const label = result.ok
+    ? `✓ ${result.latency_ms}ms`
+    : `✗ ${result.error.length > 20 ? result.error.slice(0, 20) + '…' : result.error}`
+
+  const tooltipText = result.ok
+    ? `OK — ${result.latency_ms}ms`
     : result.error
+
+  const textClass = result.ok
+    ? 'text-green-600 dark:text-green-400 text-sm font-mono cursor-default'
+    : 'text-red-600 dark:text-red-400 text-sm font-mono cursor-default'
+
   return (
-    <span
-      className="text-red-600 dark:text-red-400 text-sm font-mono cursor-default"
-      title={result.error}
-    >
-      ✗ {short}
-    </span>
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={textClass}>{label}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-sm break-all">
+          {tooltipText}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
