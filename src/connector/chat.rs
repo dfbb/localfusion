@@ -281,7 +281,7 @@ impl Connector for ChatConnector {
         let status = resp.status();
         if !status.is_success() {
             let t = resp.text().await.unwrap_or_default();
-            return Err(ConnError::Http(format!("upstream {status}: {t}")));
+            return Err(super::upstream_error(status, &t));
         }
 
         let json: Value = resp

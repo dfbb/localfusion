@@ -142,6 +142,23 @@ pub fn resolve_key(m: &ModelRow, enc_key: &[u8; 32]) -> Result<Option<String>, C
     Ok(None)
 }
 
+/// 上游 HTTP 错误的脱敏封装(设计 §5.3「供应商原始错误可截断脱敏」)。
+///
+/// 把上游响应体截断到至多 `MAX` 字符(按字符边界,UTF-8 安全),避免把供应商
+/// 内部细节/限流原文/潜在敏感片段原样透传给客户端。空体则省略冒号后内容。
+pub fn upstream_error(status: reqwest::StatusCode, body: &str) -> ConnError {
+    const MAX: usize = 200;
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return ConnError::Http(format!("upstream {status}"));
+    }
+    let mut snippet: String = trimmed.chars().take(MAX).collect();
+    if trimmed.chars().count() > MAX {
+        snippet.push('…');
+    }
+    ConnError::Http(format!("upstream {status}: {snippet}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +173,21 @@ mod tests {
             egress_url("https://api.anthropic.com", ConnectorKind::Anthropic),
             "https://api.anthropic.com/v1/messages"
         );
+    }
+
+    #[test]
+    fn upstream_error_truncates_and_handles_empty() {
+        use reqwest::StatusCode;
+        // 长错误体被截断到 200 字符并加省略号，避免上游原文全量透传
+        let long = "x".repeat(500);
+        let e = upstream_error(StatusCode::BAD_GATEWAY, &long);
+        let msg = e.to_string();
+        assert!(msg.contains('…'));
+        // 截断后正文不超过 200 个 'x'
+        assert_eq!(msg.matches('x').count(), 200);
+        // 空体省略冒号后内容(仅保留 Display 前缀 "connector http:" 的那个冒号)
+        let empty = upstream_error(StatusCode::INTERNAL_SERVER_ERROR, "   ");
+        assert_eq!(empty.to_string().matches(':').count(), 1);
     }
 
     #[test]
