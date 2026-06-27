@@ -156,14 +156,38 @@ fn short_err(msg: &str) -> String {
 fn base_url_candidates(base_url: &str) -> Vec<String> {
     let trimmed = base_url.trim_end_matches('/');
     let mut out = vec![trimmed.to_string()];
-    let alt = if trimmed.ends_with("/v1") {
+
+    // For http URLs, add the https upgrade as the next candidate so it is tried
+    // before any /v1 variants (scheme mismatch is more common than missing /v1).
+    let https_of = |s: &str| -> Option<String> {
+        s.strip_prefix("http://").map(|rest| format!("https://{rest}"))
+    };
+    let https_base = https_of(trimmed);
+    if let Some(ref h) = https_base {
+        out.push(h.clone());
+    }
+
+    // Toggle the /v1 suffix — common misconfiguration for both schemes.
+    let v1_toggle = if trimmed.ends_with("/v1") {
         trimmed.trim_end_matches("/v1").to_string()
     } else {
         format!("{trimmed}/v1")
     };
-    if !alt.is_empty() && alt != trimmed {
-        out.push(alt);
+    if !v1_toggle.is_empty() && v1_toggle != trimmed {
+        out.push(v1_toggle.clone());
     }
+    // Also include the https version of the /v1-toggled URL (for http inputs).
+    if let Some(h) = https_base {
+        let h_v1 = if h.ends_with("/v1") {
+            h.trim_end_matches("/v1").to_string()
+        } else {
+            format!("{h}/v1")
+        };
+        if !h_v1.is_empty() && h_v1 != h {
+            out.push(h_v1);
+        }
+    }
+
     out
 }
 
@@ -180,7 +204,12 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
     };
 
     let enc_key = s.enc_key;
-    let http = reqwest::Client::new();
+    // Probing uses a no-redirect client so that http→https redirects surface as
+    // failures, causing the https candidate to be tried and stored instead.
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default();
 
     let tasks: Vec<_> = models
         .into_iter()
@@ -884,5 +913,17 @@ mod tests {
     fn candidate_removes_v1_when_present() {
         assert_eq!(base_url_candidates("https://x.com/v1"), vec!["https://x.com/v1", "https://x.com"]);
         assert_eq!(base_url_candidates("https://x.com/v1/"), vec!["https://x.com/v1", "https://x.com"]);
+    }
+
+    #[test]
+    fn candidate_http_adds_https_variants() {
+        assert_eq!(
+            base_url_candidates("http://x.com"),
+            vec!["http://x.com", "https://x.com", "http://x.com/v1", "https://x.com/v1"],
+        );
+        assert_eq!(
+            base_url_candidates("http://x.com/v1/"),
+            vec!["http://x.com/v1", "https://x.com/v1", "http://x.com", "https://x.com"],
+        );
     }
 }
