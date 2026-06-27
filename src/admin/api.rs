@@ -159,15 +159,17 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
             let resolver = resolver.clone();
             let id = m.id.clone();
             async move {
-                let start = std::time::Instant::now();
                 match resolver.resolve(&id).await {
-                    Err(_) => serde_json::json!({
-                        "id": id,
-                        "ok": false,
-                        "error": "key unavailable"
-                    }),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let mut chars = msg.chars();
+                        let short: String = chars.by_ref().take(60).collect();
+                        let short = if chars.next().is_some() { format!("{short}…") } else { short };
+                        serde_json::json!({ "id": id, "ok": false, "error": short })
+                    }
                     Ok(member) => {
                         let req = crate::probe::probe_request();
+                        let start = std::time::Instant::now();
                         match member.connector.complete(&req, &member.egress).await {
                             Ok(_) => {
                                 let ms = start.elapsed().as_millis() as u64;
@@ -175,12 +177,9 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
                             }
                             Err(e) => {
                                 let msg = e.to_string();
-                                let short: String = msg.chars().take(60).collect();
-                                let short = if msg.chars().count() > 60 {
-                                    format!("{short}…")
-                                } else {
-                                    short
-                                };
+                                let mut chars = msg.chars();
+                                let short: String = chars.by_ref().take(60).collect();
+                                let short = if chars.next().is_some() { format!("{short}…") } else { short };
                                 serde_json::json!({ "id": id, "ok": false, "error": short })
                             }
                         }
