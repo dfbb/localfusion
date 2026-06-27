@@ -176,8 +176,20 @@ impl Strategy for Synthesize {
         let judge_member = ctx.resolver.resolve(judge_id).await?;
         let prompt = synthesis_prompt(&question_text(&ctx.req), &answers);
         let judge_req = make_text_request(&prompt, ctx.req.max_tokens);
-        let judge_resp =
-            call_member(&judge_member, &judge_req, CallRole::Judge, ctx.recorder).await?;
+        let judge_resp = match call_member(&judge_member, &judge_req, CallRole::Judge, ctx.recorder).await {
+            Ok(r) => r,
+            Err(e) => {
+                // judge 失败仍报错，但日志注明 panel 已成功收集答案(已付费工作不丢失，§7.4)
+                tracing::warn!(
+                    judge = judge_id,
+                    panel_answers = answers.len(),
+                    error = %e,
+                    "synthesize judge 调用失败，但已成功收集 {} 份成员答案(用量已计入统计)",
+                    answers.len()
+                );
+                return Err(e);
+            }
+        };
 
         // 把 judge 调用写入 trace
         if let Some(t) = ctx.trace {

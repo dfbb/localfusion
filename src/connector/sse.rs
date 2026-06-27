@@ -29,6 +29,26 @@ pub trait SseTranslator: Send {
     }
 }
 
+/// 在缓冲区中查找最早的 SSE 帧分隔位置，返回 (分隔起始下标, 分隔字节数)。
+/// 同时识别 `\n\n`(2 字节)与 `\r\n\r\n`(4 字节)；取最靠前者，
+/// 同位置优先按更长的 CRLF 分隔切分以免把 `\r` 残留进下一帧。
+fn find_frame_boundary(buf: &[u8]) -> Option<(usize, usize)> {
+    let lf = buf.windows(2).position(|w| w == b"\n\n");
+    let crlf = buf.windows(4).position(|w| w == b"\r\n\r\n");
+    match (lf, crlf) {
+        (Some(l), Some(c)) => {
+            if c <= l {
+                Some((c, 4))
+            } else {
+                Some((l, 2))
+            }
+        }
+        (Some(l), None) => Some((l, 2)),
+        (None, Some(c)) => Some((c, 4)),
+        (None, None) => None,
+    }
+}
+
 /// 同步发 POST + 状态码校验后 spawn 异步读取任务，返回 UnifiedStream
 pub async fn run_egress(
     url: String,
@@ -86,10 +106,10 @@ pub async fn run_egress(
             };
             buf.extend_from_slice(&chunk);
 
-            // 字节级 \n\n 切帧
-            while let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+            // 字节级切帧：识别 \n\n 与 \r\n\r\n 两种 SSE 帧分隔(经 CRLF 代理时为后者)
+            while let Some((pos, sep_len)) = find_frame_boundary(&buf) {
                 let frame = buf[..pos].to_vec();
-                buf.drain(..pos + 2);
+                buf.drain(..pos + sep_len);
 
                 // UTF-8 安全解码完整帧
                 let block = match std::str::from_utf8(&frame) {
@@ -299,5 +319,37 @@ mod tests {
         // 中途失败必须产出 Error 事件，且携带 status=Failed 的据实用量（供统计）
         let call = err_call.expect("expected Error event with call");
         assert_eq!(call.status, CallStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn parses_crlf_frame_separators() {
+        let server = wiremock::MockServer::start().await;
+        // 经 CRLF 代理后帧分隔为 \r\n\r\n
+        let body = "data: {\"t\":\"你好\"}\r\n\r\ndata: {\"t\":\"世界\"}\r\n\r\ndata: [DONE]\r\n\r\n";
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+        let mut s = run_egress(
+            format!("{}/v1", server.uri()),
+            reqwest::header::HeaderMap::new(),
+            serde_json::json!({}),
+            reqwest::Client::new(),
+            Box::new(T),
+            "m1".into(),
+        )
+        .await
+        .unwrap();
+        let mut texts = String::new();
+        while let Some(ev) = s.rx.recv().await {
+            if let Ok(UnifiedStreamEvent::TextDelta { text }) = ev {
+                texts.push_str(&text);
+            }
+        }
+        assert_eq!(texts, "你好世界");
     }
 }
