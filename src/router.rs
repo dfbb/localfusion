@@ -8,9 +8,10 @@ use crate::unified::{CallRecorder, StrategyTrace, UnifiedRequest};
 
 /// Type alias for test mock closures
 #[cfg(test)]
-type MockFn = Box<dyn Fn(&str) -> MemberHandle + Send + Sync>;
+type MockFn = std::sync::Arc<dyn Fn(&str) -> MemberHandle + Send + Sync>;
 
 /// Model resolver: parses a model_id into a callable MemberHandle (decrypt key + connector + egress)
+#[derive(Clone)]
 pub struct ModelResolver {
     db: Db,
     enc_key: [u8; 32],
@@ -38,7 +39,7 @@ impl ModelResolver {
             db,
             enc_key: [0u8; 32],
             http: reqwest::Client::new(),
-            mock: Some(Box::new(f)),
+            mock: Some(std::sync::Arc::new(f)),
         }
     }
 

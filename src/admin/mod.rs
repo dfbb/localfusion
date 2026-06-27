@@ -75,6 +75,7 @@ pub fn router(state: AdminState) -> Router {
     Router::new()
         .route("/admin/api/health", get(health))
         .merge(api::models_routes())
+        .merge(api::models_test_routes())
         .merge(api::vmodels_routes())
         .merge(api::keys_routes())
         .merge(api::stats_routes())

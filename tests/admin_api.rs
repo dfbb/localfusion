@@ -191,3 +191,32 @@ async fn keys_create_and_list() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn test_all_models_empty_db_returns_empty_array() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = app().await; // existing helper: in-memory DB, token="adm", enc_key=[0u8;32]
+
+    let r = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api/models/test-all")
+                .header("Authorization", "Bearer adm")
+                .header("Content-Type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(r.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body.is_array());
+    assert_eq!(body.as_array().unwrap().len(), 0); // no models in empty DB
+}

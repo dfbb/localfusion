@@ -136,6 +136,64 @@ async fn delete_model(
     }
 }
 
+// ─── model connectivity test ───────────────────────────────────────────────
+
+pub fn models_test_routes() -> Router<AdminState> {
+    Router::new().route("/admin/api/models/test-all", post(test_all_models))
+}
+
+async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
+    if let Err(r) = require_admin(&s, &h).await {
+        return r;
+    }
+    let models = match s.db.model_list().await {
+        Ok(m) => m,
+        Err(e) => return err_response(e),
+    };
+
+    let resolver = crate::router::ModelResolver::new(s.db.clone(), s.enc_key);
+
+    let tasks: Vec<_> = models
+        .into_iter()
+        .map(|m| {
+            let resolver = resolver.clone();
+            let id = m.id.clone();
+            async move {
+                let start = std::time::Instant::now();
+                match resolver.resolve(&id).await {
+                    Err(_) => serde_json::json!({
+                        "id": id,
+                        "ok": false,
+                        "error": "key unavailable"
+                    }),
+                    Ok(member) => {
+                        let req = crate::probe::probe_request();
+                        match member.connector.complete(&req, &member.egress).await {
+                            Ok(_) => {
+                                let ms = start.elapsed().as_millis() as u64;
+                                serde_json::json!({ "id": id, "ok": true, "latency_ms": ms })
+                            }
+                            Err(e) => {
+                                let msg = e.to_string();
+                                let short: String = msg.chars().take(60).collect();
+                                let short = if msg.chars().count() > 60 {
+                                    format!("{short}…")
+                                } else {
+                                    short
+                                };
+                                serde_json::json!({ "id": id, "ok": false, "error": short })
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(tasks).await;
+    Json(results).into_response()
+}
+
 // ─── virtual-models + strategies ───────────────────────────────────────────
 
 pub fn vmodels_routes() -> Router<AdminState> {

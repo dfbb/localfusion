@@ -11,7 +11,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn probe_request() -> UnifiedRequest {
+pub(crate) fn probe_request() -> UnifiedRequest {
     UnifiedRequest {
         items: vec![Item::Message {
             role: Role::User,
