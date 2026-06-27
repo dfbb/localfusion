@@ -286,6 +286,9 @@ impl Connector for ChatConnector {
 
         // Use text() then manual parse so Content-Type mismatch doesn't cause spurious "bad json" errors
         let text = resp.text().await.map_err(|e| ConnError::Http(format!("read body: {e}")))?;
+        if text.trim().is_empty() {
+            return Err(ConnError::Http("upstream returned empty response body".into()));
+        }
         let json: Value = serde_json::from_str(&text)
             .map_err(|e| ConnError::Http(format!("bad json: {e}")))?;
 
