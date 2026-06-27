@@ -30,6 +30,30 @@ impl FromStr for ConnectorKind {
     }
 }
 
+impl ConnectorKind {
+    /// Canonical string name (matches the `connector` column values).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConnectorKind::Chat => "chat",
+            ConnectorKind::Anthropic => "anthropic",
+            ConnectorKind::Responses => "responses",
+        }
+    }
+
+    /// The auth scheme each API format expects.
+    pub fn auth_kind(self) -> AuthKind {
+        match self {
+            ConnectorKind::Anthropic => AuthKind::XApiKey,
+            _ => AuthKind::Bearer,
+        }
+    }
+
+    /// All connector kinds, for probe-based auto-detection.
+    pub fn all() -> [ConnectorKind; 3] {
+        [ConnectorKind::Chat, ConnectorKind::Anthropic, ConnectorKind::Responses]
+    }
+}
+
 /// Authentication method enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthKind {

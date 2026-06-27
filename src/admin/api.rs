@@ -149,24 +149,28 @@ fn short_err(msg: &str) -> String {
     if chars.next().is_some() { format!("{s}…") } else { s }
 }
 
-/// Generate alternative base_url candidates to try when the configured one fails.
+/// Generate alternative base_url candidates to try when a probe fails.
 /// The most common misconfiguration is a missing (or extra) `/v1` segment, since
 /// the connector appends the provider path (e.g. `/chat/completions`) onto base_url.
-/// Returns candidates in priority order, excluding the original.
+/// Returns the original first, followed by the toggled-`/v1` variant.
 fn base_url_candidates(base_url: &str) -> Vec<String> {
     let trimmed = base_url.trim_end_matches('/');
-    let mut out = Vec::new();
-    if trimmed.ends_with("/v1") {
-        // Configured with /v1 → try without it
-        out.push(trimmed.trim_end_matches("/v1").to_string());
+    let mut out = vec![trimmed.to_string()];
+    let alt = if trimmed.ends_with("/v1") {
+        trimmed.trim_end_matches("/v1").to_string()
     } else {
-        // Configured without /v1 → try appending it
-        out.push(format!("{trimmed}/v1"));
+        format!("{trimmed}/v1")
+    };
+    if !alt.is_empty() && alt != trimmed {
+        out.push(alt);
     }
-    out.into_iter().filter(|c| c != base_url && !c.is_empty()).collect()
+    out
 }
 
 async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
+    use crate::connector::{make_connector, resolve_key, ConnectorKind, EgressCtx};
+    use std::str::FromStr;
+
     if let Err(r) = require_admin(&s, &h).await {
         return r;
     }
@@ -175,57 +179,104 @@ async fn test_all_models(State(s): State<AdminState>, h: HeaderMap) -> Response 
         Err(e) => return err_response(e),
     };
 
-    let resolver = crate::router::ModelResolver::new(s.db.clone(), s.enc_key);
+    let enc_key = s.enc_key;
+    let http = reqwest::Client::new();
 
     let tasks: Vec<_> = models
         .into_iter()
         .map(|m| {
-            let resolver = resolver.clone();
             let db = s.db.clone();
-            let id = m.id.clone();
-            let configured_base = m.base_url.clone();
+            let http = http.clone();
             async move {
-                let mut member = match resolver.resolve(&id).await {
-                    Ok(member) => member,
+                // Resolve the API key once (shared across all probe attempts)
+                let key = match resolve_key(&m, &enc_key) {
+                    Ok(k) => k,
                     Err(e) => {
-                        return serde_json::json!({ "id": id, "ok": false, "error": short_err(&e.to_string()) });
+                        return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) });
+                    }
+                };
+                if key.is_none() {
+                    return serde_json::json!({ "id": m.id, "ok": false, "error": "key unavailable" });
+                }
+
+                let default_max_tokens = m.extra.as_deref()
+                    .and_then(|e| serde_json::from_str::<serde_json::Value>(e).ok())
+                    .and_then(|v| v.get("default_max_tokens").and_then(|x| x.as_u64()))
+                    .map(|x| x as u32);
+
+                let configured_kind = match ConnectorKind::from_str(&m.connector) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&e.to_string()) });
                     }
                 };
 
                 let req = crate::probe::probe_request();
 
-                // First attempt: the configured base_url
-                let start = std::time::Instant::now();
-                if member.connector.complete(&req, &member.egress).await.is_ok() {
-                    let ms = start.elapsed().as_millis() as u64;
-                    return serde_json::json!({ "id": id, "ok": true, "latency_ms": ms });
+                // Build the probe order: configured (kind, base_url) variants first,
+                // then every other connector kind with its base_url variants.
+                // Each entry is (ConnectorKind, base_url).
+                let mut candidates: Vec<(ConnectorKind, String)> = Vec::new();
+                for base in base_url_candidates(&m.base_url) {
+                    candidates.push((configured_kind, base));
+                }
+                for kind in ConnectorKind::all() {
+                    if kind == configured_kind {
+                        continue;
+                    }
+                    for base in base_url_candidates(&m.base_url) {
+                        candidates.push((kind, base));
+                    }
                 }
 
-                // Failed: try alternative base_url candidates (e.g. missing /v1)
                 let mut last_err = String::from("connection test failed");
-                for candidate in base_url_candidates(&configured_base) {
-                    member.egress.base_url = candidate.clone();
+                for (idx, (kind, base_url)) in candidates.iter().enumerate() {
+                    let egress = EgressCtx {
+                        base_url: base_url.clone(),
+                        model: m.model.clone(),
+                        auth: kind.auth_kind(),
+                        key: key.clone(),
+                        anthropic_version: m.anthropic_version.clone(),
+                        default_max_tokens,
+                        http: http.clone(),
+                    };
+                    let connector = make_connector(*kind);
                     let start = std::time::Instant::now();
-                    match member.connector.complete(&req, &member.egress).await {
+                    match connector.complete(&req, &egress).await {
                         Ok(_) => {
                             let ms = start.elapsed().as_millis() as u64;
-                            // Persist the corrected base_url to the DB
-                            if let Err(e) = db.model_update_base_url(&id, &candidate).await {
+                            // idx==0 is the configured (kind, base_url) — nothing changed
+                            if idx == 0 {
+                                return serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
+                            }
+                            // A different (kind and/or base_url) worked — persist it
+                            let kind_changed = *kind != configured_kind;
+                            let base_changed = base_url != m.base_url.trim_end_matches('/');
+                            let persist = if kind_changed {
+                                db.model_update_connector_base_url(&m.id, kind.as_str(), base_url).await
+                            } else {
+                                db.model_update_base_url(&m.id, base_url).await
+                            };
+                            if let Err(e) = persist {
                                 return serde_json::json!({
-                                    "id": id, "ok": false,
-                                    "error": short_err(&format!("detected {candidate} but DB update failed: {e}"))
+                                    "id": m.id, "ok": false,
+                                    "error": short_err(&format!("detected {} {} but DB update failed: {e}", kind.as_str(), base_url))
                                 });
                             }
-                            return serde_json::json!({
-                                "id": id, "ok": true, "latency_ms": ms,
-                                "base_url_fixed": candidate
-                            });
+                            let mut out = serde_json::json!({ "id": m.id, "ok": true, "latency_ms": ms });
+                            if base_changed {
+                                out["base_url_fixed"] = serde_json::json!(base_url);
+                            }
+                            if kind_changed {
+                                out["connector_fixed"] = serde_json::json!(kind.as_str());
+                            }
+                            return out;
                         }
                         Err(e) => last_err = e.to_string(),
                     }
                 }
 
-                serde_json::json!({ "id": id, "ok": false, "error": short_err(&last_err) })
+                serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) })
             }
         })
         .collect();
@@ -825,13 +876,13 @@ mod tests {
 
     #[test]
     fn candidate_adds_v1_when_missing() {
-        assert_eq!(base_url_candidates("https://x.com"), vec!["https://x.com/v1"]);
-        assert_eq!(base_url_candidates("https://x.com/"), vec!["https://x.com/v1"]);
+        assert_eq!(base_url_candidates("https://x.com"), vec!["https://x.com", "https://x.com/v1"]);
+        assert_eq!(base_url_candidates("https://x.com/"), vec!["https://x.com", "https://x.com/v1"]);
     }
 
     #[test]
     fn candidate_removes_v1_when_present() {
-        assert_eq!(base_url_candidates("https://x.com/v1"), vec!["https://x.com"]);
-        assert_eq!(base_url_candidates("https://x.com/v1/"), vec!["https://x.com"]);
+        assert_eq!(base_url_candidates("https://x.com/v1"), vec!["https://x.com/v1", "https://x.com"]);
+        assert_eq!(base_url_candidates("https://x.com/v1/"), vec!["https://x.com/v1", "https://x.com"]);
     }
 }

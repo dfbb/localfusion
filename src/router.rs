@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::connector::{make_connector, resolve_key, AuthKind, ConnectorKind, EgressCtx};
+use crate::connector::{make_connector, resolve_key, ConnectorKind, EgressCtx};
 use crate::db::Db;
 use crate::error::FusionError;
 use crate::strategy::{make_strategy, MemberHandle, StrategyCtx, StrategyOutput};
@@ -56,11 +56,7 @@ impl ModelResolver {
         let kind = ConnectorKind::from_str(&m.connector)
             .map_err(|e| FusionError::InvalidRequest(e.to_string()))?;
 
-        // Anthropic uses x-api-key header; all others use Bearer
-        let auth = match kind {
-            ConnectorKind::Anthropic => AuthKind::XApiKey,
-            _ => AuthKind::Bearer,
-        };
+        let auth = kind.auth_kind();
 
         let key = resolve_key(&m, &self.enc_key)?;
 

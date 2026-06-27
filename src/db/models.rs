@@ -70,6 +70,23 @@ impl Db {
             .await?;
         Ok(())
     }
+
+    /// Update both connector and base_url of a model (used by connectivity auto-detection
+    /// when a different API format than configured turns out to be the working one).
+    pub async fn model_update_connector_base_url(
+        &self,
+        id: &str,
+        connector: &str,
+        base_url: &str,
+    ) -> Result<(), FusionError> {
+        sqlx::query("UPDATE models SET connector = ?, base_url = ? WHERE id = ?")
+            .bind(connector)
+            .bind(base_url)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

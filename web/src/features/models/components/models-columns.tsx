@@ -29,15 +29,25 @@ function StatusCell({ modelId }: { modelId: string }) {
     return <span className="text-muted-foreground text-sm">—</span>
   }
 
+  const fixed = result.ok && (result.base_url_fixed || result.connector_fixed)
+
   const label = result.ok
-    ? `✓ ${result.latency_ms}ms${result.base_url_fixed ? ' (fixed)' : ''}`
+    ? `✓ ${result.latency_ms}ms${fixed ? ' (fixed)' : ''}`
     : `✗ ${result.error.length > 20 ? result.error.slice(0, 20) + '…' : result.error}`
 
-  const tooltipText = result.ok
-    ? result.base_url_fixed
-      ? `OK — ${result.latency_ms}ms · base_url auto-corrected to ${result.base_url_fixed}`
-      : `OK — ${result.latency_ms}ms`
-    : result.error
+  let tooltipText: string
+  if (result.ok) {
+    if (fixed) {
+      const parts: string[] = []
+      if (result.connector_fixed) parts.push(`connector → ${result.connector_fixed}`)
+      if (result.base_url_fixed) parts.push(`base_url → ${result.base_url_fixed}`)
+      tooltipText = `OK — ${result.latency_ms}ms · auto-corrected: ${parts.join(', ')}`
+    } else {
+      tooltipText = `OK — ${result.latency_ms}ms`
+    }
+  } else {
+    tooltipText = result.error
+  }
 
   const textClass = result.ok
     ? 'text-green-600 dark:text-green-400 text-sm font-mono cursor-default'
