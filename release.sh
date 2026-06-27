@@ -153,11 +153,25 @@ git push origin "$TAG"
 echo ""
 echo "==> Creating GitHub release $TAG..."
 
-# Build release notes from git log
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+BASE_URL="https://github.com/${REPO}/commit"
+
+# Build release notes with linked commit hashes
+build_notes() {
+    local range="$1"
+    local lines
+    lines="$(git log --oneline $range)"
+    while IFS= read -r line; do
+        local hash="${line%% *}"
+        local subject="${line#* }"
+        echo "* [${hash}](${BASE_URL}/${hash}) ${subject}"
+    done <<< "$lines"
+}
+
 if [[ -z "$LAST_TAG" ]]; then
-    NOTES="$(git log --oneline HEAD~20..HEAD 2>/dev/null || git log --oneline)"
+    NOTES="$(build_notes "HEAD~20..HEAD" 2>/dev/null || build_notes "")"
 else
-    NOTES="$(git log --oneline "${LAST_TAG}..HEAD")"
+    NOTES="$(build_notes "${LAST_TAG}..HEAD")"
 fi
 
 gh release create "$TAG" \
