@@ -33,6 +33,9 @@ async fn messages(State(s): State<InferenceState>, h: HeaderMap, Json(b): Json<V
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    println!("LocalFusion v{}", env!("APP_VERSION"));
+
     let db = Db::open(&cli.db).await?;
 
     // Logging (use settings from db first, fall back to defaults)
