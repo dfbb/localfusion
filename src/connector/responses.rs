@@ -251,9 +251,8 @@ impl Connector for ResponsesConnector {
             return Err(super::upstream_error(status, &t));
         }
 
-        let json: Value = resp
-            .json()
-            .await
+        let text = resp.text().await.map_err(|e| ConnError::Http(format!("read body: {e}")))?;
+        let json: Value = serde_json::from_str(&text)
             .map_err(|e| ConnError::Http(format!("bad json: {e}")))?;
 
         Ok(parse_responses_response(&json, &ctx.model))

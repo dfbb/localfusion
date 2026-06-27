@@ -284,9 +284,9 @@ impl Connector for ChatConnector {
             return Err(super::upstream_error(status, &t));
         }
 
-        let json: Value = resp
-            .json()
-            .await
+        // Use text() then manual parse so Content-Type mismatch doesn't cause spurious "bad json" errors
+        let text = resp.text().await.map_err(|e| ConnError::Http(format!("read body: {e}")))?;
+        let json: Value = serde_json::from_str(&text)
             .map_err(|e| ConnError::Http(format!("bad json: {e}")))?;
 
         Ok(parse_chat_response(&json, &ctx.model))
