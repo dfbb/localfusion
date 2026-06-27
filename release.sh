@@ -106,8 +106,8 @@ build_target() {
     if command -v cross &>/dev/null; then
         cross build --release --target "$TARGET"
     else
-        # Fall back to cargo (only works natively for the host platform)
-        echo "    (cross not installed — using cargo; non-native targets may fail)"
+        # Fall back to cargo — reqwest uses rustls-tls so no OpenSSL needed
+        echo "    (cross not installed — using cargo)"
         cargo build --release --target "$TARGET"
     fi
 
