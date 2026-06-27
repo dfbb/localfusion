@@ -23,7 +23,14 @@ impl Strategy for Cheapest {
         if ctx.members.is_empty() {
             return Err(FusionError::StrategyError("cheapest: no members".into()));
         }
-        let out_est = ctx.params.get("output_estimate_max").and_then(|v| v.as_u64()).unwrap_or(512);
+        // 输出估算:优先用请求的 max_tokens(spec §7.3「输出用 max_tokens 或历史均值」),
+        // 缺省再退回 params.output_estimate_max(默认 512)
+        let out_est = ctx
+            .req
+            .max_tokens
+            .map(|m| m as u64)
+            .or_else(|| ctx.params.get("output_estimate_max").and_then(|v| v.as_u64()))
+            .unwrap_or(512);
         let in_est = estimate_input_tokens(&ctx.req);
         let mut best_idx = None::<usize>;
         let mut best_cost = f64::MAX;

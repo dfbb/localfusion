@@ -59,8 +59,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inference_bind = db.setting_get_or("inference_bind", "127.0.0.1:8787").await?;
     let admin_bind = db.setting_get_or("admin_bind", "127.0.0.1:8788").await?;
 
-    // 探测后台
-    localfusion::probe::spawn_probe_loop(db.clone(), enc_key, 1800);
+    // 探测后台(收到关闭信号时退出)
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    localfusion::probe::spawn_probe_loop(db.clone(), enc_key, 1800, shutdown_rx);
 
     // 推理 server
     let inf_state = InferenceState {
@@ -84,8 +85,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
     tracing::info!("inference on {inference_bind}, admin on {admin_bind}");
 
-    let inf = axum::serve(inf_listener, inf_app);
-    let adm = axum::serve(admin_listener, admin_app);
-    tokio::try_join!(inf.into_future(), adm.into_future())?;
+    // 优雅关闭:SIGINT/SIGTERM 触发,两个 server 停止接收并放行在途请求,探测任务退出
+    let inf = axum::serve(inf_listener, inf_app).with_graceful_shutdown(shutdown_signal());
+    let adm = axum::serve(admin_listener, admin_app).with_graceful_shutdown(shutdown_signal());
+    let result = tokio::try_join!(inf.into_future(), adm.into_future());
+    let _ = shutdown_tx.send(true); // 通知探测任务退出
+    result?;
     Ok(())
+}
+
+/// 等待 SIGINT(Ctrl-C) 或 SIGTERM;任一到达即返回,触发 graceful shutdown。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut sig) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            sig.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("收到关闭信号，开始优雅关闭");
 }

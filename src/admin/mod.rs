@@ -17,6 +17,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::db::Db;
 use crate::error::FusionError;
@@ -50,8 +51,27 @@ pub(crate) async fn require_admin(
     crate::auth::verify_admin(&hash, headers).map_err(err_response)
 }
 
-/// 构建管理路由器；所有端点挂载在 /admin/api/ 前缀下
+/// 构建管理路由器；所有端点挂载在 /admin/api/ 前缀下。
+///
+/// 生产形态下前端经 rust-embed 与本服务同源,不需要 CORS;
+/// 仅为前端开发态(Vite dev server 在另一 localhost 端口)放开 localhost/127.0.0.1 来源,
+/// 绝不放开任意来源,避免本机其他网页跨站访问管理 API。
 pub fn router(state: AdminState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|origin, _req| {
+            origin
+                .to_str()
+                .map(|o| {
+                    o.starts_with("http://127.0.0.1:")
+                        || o.starts_with("http://localhost:")
+                        || o == "http://127.0.0.1"
+                        || o == "http://localhost"
+                })
+                .unwrap_or(false)
+        }))
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+
     Router::new()
         .route("/admin/api/health", get(health))
         .merge(api::models_routes())
@@ -61,6 +81,7 @@ pub fn router(state: AdminState) -> Router {
         .merge(api::playground_routes())
         .merge(api::logging_routes())
         .fallback(get(static_assets::serve))
+        .layer(cors)
         .with_state(state)
 }
 

@@ -53,14 +53,28 @@ pub async fn probe_once(
     }
 }
 
-/// 后台循环（main 装配时 spawn）。
-pub fn spawn_probe_loop(db: Db, enc_key: [u8; 32], interval_secs: u64) {
+/// 后台循环（main 装配时 spawn）。收到 shutdown 信号(watch 变为 true)时退出。
+pub fn spawn_probe_loop(
+    db: Db,
+    enc_key: [u8; 32],
+    interval_secs: u64,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     tokio::spawn(async move {
         let resolver = ModelResolver::new(db.clone(), enc_key);
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
-            ticker.tick().await;
-            probe_once(&db, &resolver, now_secs(), interval_secs as i64 * 2).await;
+            tokio::select! {
+                _ = ticker.tick() => {
+                    probe_once(&db, &resolver, now_secs(), interval_secs as i64 * 2).await;
+                }
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() {
+                        tracing::info!("探测后台任务收到关闭信号，退出");
+                        break;
+                    }
+                }
+            }
         }
     });
 }

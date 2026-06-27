@@ -89,8 +89,8 @@ pub fn params_schema(name: &str) -> serde_json::Value {
         "cheapest" => json!({
             "type": "object",
             "properties": {
-                "tokenizer": { "type": "string", "enum": ["approx", "tiktoken"], "default": "approx" },
-                "output_estimate_max": { "type": "integer", "default": 512 }
+                "tokenizer": { "type": "string", "enum": ["approx"], "default": "approx", "description": "输入 token 估算方式(目前仅 approx: 字符数/4)" },
+                "output_estimate_max": { "type": "integer", "default": 512, "description": "无 max_tokens 时的输出 token 估算上限" }
             }
         }),
         "multimodal" => json!({

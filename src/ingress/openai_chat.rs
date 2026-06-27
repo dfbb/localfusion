@@ -3,6 +3,23 @@ use serde_json::{json, Value};
 use crate::error::FusionError;
 use crate::unified::*;
 
+/// 提取 OpenAI Chat 消息的 content：字符串直接取；数组型(多段/多模态)拼接其中 text 段
+fn content_to_text(content: Option<&Value>) -> String {
+    let Some(content) = content else {
+        return String::new();
+    };
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        return arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()).map(String::from))
+            .collect();
+    }
+    String::new()
+}
+
 /// 将 OpenAI Chat Completions 请求体解析为 UnifiedRequest
 pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
     let msgs = body
@@ -18,11 +35,7 @@ pub fn parse_request(body: &Value) -> Result<UnifiedRequest, FusionError> {
             "tool" => Role::Tool,
             _ => Role::User,
         };
-        let text = m
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let text = content_to_text(m.get("content"));
         items.push(Item::Message {
             role,
             content: vec![ContentBlock::Text(text)],
@@ -136,6 +149,26 @@ mod tests {
         assert_eq!(req.items.len(), 2);
         assert!(req.stream);
         assert_eq!(req.max_tokens, Some(50));
+    }
+
+    #[test]
+    fn parse_array_content() {
+        // OpenAI 多段/多模态 content：拼接其中 text 段，忽略非文本块
+        let body = serde_json::json!({"model":"vm","messages":[
+            {"role":"user","content":[
+                {"type":"text","text":"hello "},
+                {"type":"image_url","image_url":{"url":"data:..."}},
+                {"type":"text","text":"world"}
+            ]}]});
+        let req = parse_request(&body).unwrap();
+        assert_eq!(req.items.len(), 1);
+        match &req.items[0] {
+            Item::Message { content, .. } => match &content[0] {
+                ContentBlock::Text(t) => assert_eq!(t, "hello world"),
+                _ => panic!("expected text block"),
+            },
+            _ => panic!("expected message"),
+        }
     }
 
     #[test]
