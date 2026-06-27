@@ -8,6 +8,10 @@ use tokio::sync::mpsc;
 
 use crate::unified::{ConnError, UnifiedStream, UnifiedStreamEvent};
 
+/// SSE 切帧缓冲上限(单帧未闭合时累积字节的硬上限)。
+/// 正常 SSE 单帧远小于此值;超限说明上游异常,触发受控失败而非内存无限增长。
+const MAX_FRAME_BUFFER: usize = 1024 * 1024;
+
 /// SSE 事件翻译器 trait
 /// push：处理一个 JSON 块，返回零或多个统一事件
 /// finish：流结束时产出最终事件（如 Done{usage, call, ...}）
@@ -76,7 +80,7 @@ pub async fn run_egress(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(ConnError::Http(format!("upstream {status}: {text}")));
+        return Err(super::upstream_error(status, &text));
     }
 
     let (tx, rx) = mpsc::channel::<Result<UnifiedStreamEvent, ConnError>>(64);
@@ -105,6 +109,18 @@ pub async fn run_egress(
                 }
             };
             buf.extend_from_slice(&chunk);
+
+            // 缓冲上限保护:防止异常上游持续发送不含帧分隔符的字节导致 buf 无限增长
+            if buf.len() > MAX_FRAME_BUFFER {
+                let call = translator.fail();
+                let _ = tx
+                    .send(Ok(UnifiedStreamEvent::Error {
+                        message: format!("frame buffer exceeded {MAX_FRAME_BUFFER} bytes"),
+                        call,
+                    }))
+                    .await;
+                return;
+            }
 
             // 字节级切帧：识别 \n\n 与 \r\n\r\n 两种 SSE 帧分隔(经 CRLF 代理时为后者)
             while let Some((pos, sep_len)) = find_frame_boundary(&buf) {
