@@ -42,7 +42,9 @@ const defaultValues: ModelForm = {
   extra: '',
 }
 
-/** Read default_max_tokens from an extra JSON string, or null if absent/malformed. */
+const DEFAULT_MAX_INPUT_TOKENS = 1_000_000
+
+/** Read default_max_tokens (auto-detected output cap) from an extra JSON string. */
 function parseMaxTokens(extra: string | null | undefined): number | null {
   if (!extra) return null
   try {
@@ -53,6 +55,32 @@ function parseMaxTokens(extra: string | null | undefined): number | null {
   }
 }
 
+/** Read max_input_tokens (user-editable context window) from extra, defaulting to 1M. */
+function parseMaxInputTokens(extra: string | null | undefined): number {
+  if (!extra) return DEFAULT_MAX_INPUT_TOKENS
+  try {
+    const v = (JSON.parse(extra) as Record<string, unknown>)?.max_input_tokens
+    return typeof v === 'number' ? v : DEFAULT_MAX_INPUT_TOKENS
+  } catch {
+    return DEFAULT_MAX_INPUT_TOKENS
+  }
+}
+
+/** Merge max_input_tokens into the extra JSON string, preserving all other keys. */
+function withMaxInputTokens(extra: string | undefined, maxInputTokens: number): string {
+  let obj: Record<string, unknown> = {}
+  if (extra) {
+    try {
+      const parsed = JSON.parse(extra) as Record<string, unknown>
+      if (parsed && typeof parsed === 'object') obj = parsed
+    } catch {
+      /* malformed — start fresh */
+    }
+  }
+  obj.max_input_tokens = maxInputTokens
+  return JSON.stringify(obj)
+}
+
 export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const isEdit = !!currentRow
   const qc = useQueryClient()
@@ -60,6 +88,8 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const [keyMode, setKeyMode] = useState<'direct' | 'env'>('direct')
   // Auto-detected max output tokens, persisted in extra.default_max_tokens; shown read-only.
   const maxTokens = parseMaxTokens(currentRow?.extra)
+  // User-editable context window (extra.max_input_tokens), defaulting to 1M.
+  const [maxInputTokens, setMaxInputTokens] = useState<number>(DEFAULT_MAX_INPUT_TOKENS)
 
   const {
     register,
@@ -87,10 +117,12 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           anthropic_version: currentRow.anthropic_version ?? '',
           extra: currentRow.extra ?? '',
         })
+        setMaxInputTokens(parseMaxInputTokens(currentRow.extra))
         // 直填密钥的模型(api_key_enc 有值)即便 reset 清空 api_key 也应保持「直填」模式
         setKeyMode(currentRow.api_key_enc ? 'direct' : currentRow.api_key_env ? 'env' : 'direct')
       } else {
         reset(defaultValues)
+        setMaxInputTokens(DEFAULT_MAX_INPUT_TOKENS)
         setKeyMode('direct')
       }
     }
@@ -119,7 +151,8 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
     if (!payload.api_key) delete payload.api_key
     if (!payload.api_key_env) delete payload.api_key_env
     if (!payload.anthropic_version) delete payload.anthropic_version
-    if (!payload.extra) delete payload.extra
+    // Merge the user-edited context window into extra (preserves probe-managed keys).
+    payload.extra = withMaxInputTokens(payload.extra, maxInputTokens)
     m.mutate(payload)
   }
 
@@ -285,11 +318,30 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
             </div>
           </div>
 
+          {/* Max input tokens — user-editable context window (extra.max_input_tokens) */}
+          <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
+            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="model-max-input-tokens">
+              Max Input Tokens
+            </LabelPrimitive.Root>
+            <Input
+              id="model-max-input-tokens"
+              className="col-span-4"
+              type="number"
+              min={1}
+              value={maxInputTokens}
+              onChange={(e) => setMaxInputTokens(Number(e.target.value) || 0)}
+              placeholder="1000000"
+            />
+            <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
+              上下文窗口（输入上限），默认 1,000,000
+            </p>
+          </div>
+
           {/* Max output tokens — auto-detected by connectivity probing, read-only */}
           {isEdit && (
             <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
               <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="model-max-tokens">
-                Max Tokens
+                Max Output Tokens
               </LabelPrimitive.Root>
               <Input
                 id="model-max-tokens"
@@ -300,12 +352,12 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
                 placeholder="未检测"
               />
               <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
-                由连接测试自动检测，不可编辑
+                输出上限，由连接测试自动检测，不可编辑
               </p>
             </div>
           )}
 
-          {/* extra is carried through hidden — auto-managed (default_max_tokens), not user-editable */}
+          {/* extra is carried through hidden — probe-managed (default_max_tokens) + max_input_tokens */}
           <input type="hidden" {...register('extra')} />
         </form>
 

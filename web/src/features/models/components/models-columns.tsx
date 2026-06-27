@@ -29,7 +29,7 @@ function StatusCell({ modelId }: { modelId: string }) {
     return <span className="text-muted-foreground text-sm">—</span>
   }
 
-  const fixed = result.ok && (result.base_url_fixed || result.connector_fixed || result.model_fixed)
+  const fixed = result.ok && (result.base_url_fixed || result.connector_fixed)
 
   const label = result.ok
     ? `✓ ${result.latency_ms}ms${fixed ? ' (fixed)' : ''}`
@@ -43,7 +43,6 @@ function StatusCell({ modelId }: { modelId: string }) {
       const parts: string[] = []
       if (result.connector_fixed) parts.push(`connector → ${result.connector_fixed}`)
       if (result.base_url_fixed) parts.push(`base_url → ${result.base_url_fixed}`)
-      if (result.model_fixed) parts.push(`model → ${result.model_fixed}`)
       tooltipText = `OK — ${meta.join(' · ')} · auto-corrected: ${parts.join(', ')}`
     } else {
       tooltipText = `OK — ${meta.join(' · ')}`

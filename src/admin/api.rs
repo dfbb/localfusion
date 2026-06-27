@@ -193,12 +193,33 @@ fn base_url_candidates(base_url: &str) -> Vec<String> {
     out
 }
 
-/// Candidate max output token limits to probe, from largest to smallest. The first one
-/// the upstream accepts becomes the model's persisted `default_max_tokens`.
-const MAX_TOKEN_PROBES: [u32; 2] = [1_000_000, 200_000];
-/// Tiny max_tokens used for reachability probes (Step 1 / [1m] detection), so an oversized
-/// value never makes a reachable endpoint look unreachable.
+/// Max output tokens we optimistically try first. If the upstream rejects it with a
+/// message stating the valid range, we parse the real limit from that message and use it.
+const PROBE_MAX_TOKENS: u32 = 1_000_000;
+/// Tiny max_tokens used for reachability probes, so an oversized value never makes a
+/// reachable endpoint look unreachable.
 const PING_MAX_TOKENS: u32 = 8;
+
+/// Extract the largest integer appearing in an upstream error message. Used to recover the
+/// real max output token limit from rejections like
+/// `the valid range of max_tokens is [1, 393216]` — the largest number is the upper bound.
+/// Returns None if no plausible (>= 1024) integer is present.
+fn parse_max_tokens_limit(msg: &str) -> Option<u32> {
+    let mut best: Option<u64> = None;
+    let mut cur = String::new();
+    // Walk the string, collecting maximal digit runs; track the largest value seen.
+    for ch in msg.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_digit() {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(n) = cur.parse::<u64>() {
+                best = Some(best.map_or(n, |b| b.max(n)));
+            }
+            cur.clear();
+        }
+    }
+    best.filter(|&n| (1024..=u32::MAX as u64).contains(&n)).map(|n| n as u32)
+}
 
 /// Serialize a model's `extra` JSON with `default_max_tokens` set to the given value,
 /// preserving any other keys already present.
@@ -245,11 +266,11 @@ async fn probe_attempt(
 
 /// Probe a single model row. Steps:
 ///  1. Find a working (connector, base_url) — trying the configured combo first, then variants.
-///  2. If the model name has no `[1m]` suffix, probe the `{model}[1m]` variant; on success, rename to it.
-///  3. Probe the accepted max output tokens (1M first, then 200k); the first accepted size is stored.
+///  2. Probe the accepted max output tokens: try 1M, and if rejected, parse the real upper
+///     bound from the error message and confirm it. The accepted value is stored.
 ///
-/// Any auto-correction (connector/base_url/model/default_max_tokens) is persisted via model_upsert.
-/// Returns { id, ok, latency_ms?, error?, base_url_fixed?, connector_fixed?, model_fixed?, max_tokens? }.
+/// Any auto-correction (connector/base_url/default_max_tokens) is persisted via model_upsert.
+/// Returns { id, ok, latency_ms?, error?, base_url_fixed?, connector_fixed?, max_tokens? }.
 async fn probe_one(
     m: &crate::db::models::ModelRow,
     db: &crate::db::Db,
@@ -300,26 +321,19 @@ async fn probe_one(
         None => return serde_json::json!({ "id": m.id, "ok": false, "error": short_err(&last_err) }),
     };
 
-    // ── Step 2: probe the [1m] model-name variant (only if not already suffixed) ──
-    // On success, switch to the [1m] model name.
-    let mut final_model = m.model.clone();
-    let mut model_fixed: Option<String> = None;
-    if !m.model.ends_with("[1m]") {
-        let variant = format!("{}[1m]", m.model);
-        if probe_attempt(work_kind, &work_base, &variant, &key, av, PING_MAX_TOKENS, http).await.is_ok() {
-            final_model = variant.clone();
-            model_fixed = Some(variant);
-        }
-    }
-
-    // ── Step 3: probe the accepted max output tokens (largest first) ─────────
-    // Actually send each candidate size; the first the upstream accepts wins.
-    // If none are accepted (rare), leave the existing default untouched.
+    // ── Step 2: probe the accepted max output tokens ─────────────────────────
+    // Try a large value first. If rejected, parse the real upper bound from the
+    // error message (e.g. "valid range of max_tokens is [1, 393216]") and re-probe
+    // with it to confirm. If nothing is accepted, leave the existing default untouched.
     let mut max_tokens: Option<u32> = None;
-    for size in MAX_TOKEN_PROBES {
-        if probe_attempt(work_kind, &work_base, &final_model, &key, av, size, http).await.is_ok() {
-            max_tokens = Some(size);
-            break;
+    match probe_attempt(work_kind, &work_base, &m.model, &key, av, PROBE_MAX_TOKENS, http).await {
+        Ok(_) => max_tokens = Some(PROBE_MAX_TOKENS),
+        Err(e) => {
+            if let Some(limit) = parse_max_tokens_limit(&e) {
+                if probe_attempt(work_kind, &work_base, &m.model, &key, av, limit, http).await.is_ok() {
+                    max_tokens = Some(limit);
+                }
+            }
         }
     }
 
@@ -332,11 +346,10 @@ async fn probe_one(
         .map(|x| x as u32);
     let max_changed = max_tokens.is_some() && max_tokens != prev_max;
 
-    if kind_changed || base_changed || model_fixed.is_some() || max_changed {
+    if kind_changed || base_changed || max_changed {
         let mut row = m.clone();
         row.connector = work_kind.as_str().to_string();
         row.base_url = work_base.clone();
-        row.model = final_model.clone();
         if let Some(mt) = max_tokens {
             row.extra = Some(extra_with_max_tokens(m.extra.as_deref(), mt));
         }
@@ -352,7 +365,6 @@ async fn probe_one(
     if let Some(mt) = max_tokens { out["max_tokens"] = serde_json::json!(mt); }
     if base_changed { out["base_url_fixed"] = serde_json::json!(work_base); }
     if kind_changed { out["connector_fixed"] = serde_json::json!(work_kind.as_str()); }
-    if let Some(mf) = model_fixed { out["model_fixed"] = serde_json::json!(mf); }
     out
 }
 
@@ -994,7 +1006,7 @@ async fn put_logging(
 
 #[cfg(test)]
 mod tests {
-    use super::{base_url_candidates, extra_with_max_tokens};
+    use super::{base_url_candidates, extra_with_max_tokens, parse_max_tokens_limit};
     use serde_json::Value;
 
     #[test]
@@ -1043,5 +1055,21 @@ mod tests {
         let out = extra_with_max_tokens(Some("not json"), 200_000);
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["default_max_tokens"], 200_000);
+    }
+
+    #[test]
+    fn parse_limit_picks_largest_integer() {
+        // DeepSeek-style rejection: "[1, 393216]" → 393216 is the real output cap.
+        assert_eq!(
+            parse_max_tokens_limit("the valid range of max_tokens is [1, 393216]"),
+            Some(393216)
+        );
+    }
+
+    #[test]
+    fn parse_limit_ignores_small_or_absent() {
+        // No plausible (>=1024) integer present.
+        assert_eq!(parse_max_tokens_limit("model not found"), None);
+        assert_eq!(parse_max_tokens_limit("range is [1, 8]"), None);
     }
 }

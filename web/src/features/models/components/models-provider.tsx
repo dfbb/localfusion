@@ -7,7 +7,7 @@ import { type ModelRow } from '../data/schema'
 type ModelsDialogType = 'add' | 'edit' | 'delete'
 
 export type TestResult =
-  | { ok: true; latency_ms: number; max_tokens?: number; base_url_fixed?: string; connector_fixed?: string; model_fixed?: string }
+  | { ok: true; latency_ms: number; max_tokens?: number; base_url_fixed?: string; connector_fixed?: string }
   | { ok: false; error: string }
 
 // Raw JSON item returned by the backend probe endpoints.
@@ -19,7 +19,6 @@ type ProbeResponseItem = {
   max_tokens?: number
   base_url_fixed?: string
   connector_fixed?: string
-  model_fixed?: string
 }
 
 function toTestResult(item: ProbeResponseItem): TestResult {
@@ -30,14 +29,13 @@ function toTestResult(item: ProbeResponseItem): TestResult {
         max_tokens: item.max_tokens,
         base_url_fixed: item.base_url_fixed,
         connector_fixed: item.connector_fixed,
-        model_fixed: item.model_fixed,
       }
     : { ok: false, error: item.error ?? 'unknown error' }
 }
 
-// True if a successful probe auto-corrected any persisted field.
+// True if a successful probe auto-corrected connector/base_url (used for the toast count).
 function wasFixed(item: ProbeResponseItem): boolean {
-  return !!(item.base_url_fixed || item.connector_fixed || item.model_fixed)
+  return !!(item.base_url_fixed || item.connector_fixed)
 }
 
 type ModelsContextType = {
@@ -72,9 +70,10 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
         map.set(item.id, toTestResult(item))
       }
       setTestResults(map)
+      // A probe may persist max_tokens even when connector/base_url were already correct,
+      // so always refetch to reflect detected values; only toast when config was corrected.
+      await qc.refetchQueries({ queryKey: ['models'] })
       if (fixedCount > 0) {
-        // connector/base_url/model was auto-corrected in the DB; force an immediate refetch
-        await qc.refetchQueries({ queryKey: ['models'] })
         toast.success(`Auto-corrected config for ${fixedCount} model(s)`)
       }
     } catch (err: unknown) {
@@ -96,9 +95,10 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       const resp = await api.post<ProbeResponseItem>(`/models/${id}/test`)
       const item = resp.data
       setTestResults(prev => new Map(prev).set(id, toTestResult(item)))
-      if (item.ok && wasFixed(item)) {
+      if (item.ok) {
+        // Refetch so detected max_tokens shows immediately; toast only when config changed.
         await qc.refetchQueries({ queryKey: ['models'] })
-        toast.success('Auto-corrected config')
+        if (wasFixed(item)) toast.success('Auto-corrected config')
       }
     } catch {
       // silently ignore — the user didn't explicitly request this test
