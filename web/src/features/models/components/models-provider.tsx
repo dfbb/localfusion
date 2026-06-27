@@ -37,7 +37,7 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       const map = new Map<string, TestResult>()
       for (const item of resp.data) {
         map.set(item.id, item.ok
-          ? { ok: true, latency_ms: item.latency_ms! }
+          ? { ok: true, latency_ms: item.latency_ms ?? 0 } // ok:true responses always include latency_ms; fallback to 0 guards against schema drift
           : { ok: false, error: item.error ?? 'unknown error' }
         )
       }
