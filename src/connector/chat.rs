@@ -281,11 +281,13 @@ impl Connector for ChatConnector {
         let status = resp.status();
         if !status.is_success() {
             let t = resp.text().await.unwrap_or_default();
+            super::log_http_exchange("POST", &url, &body, status.as_u16(), &t);
             return Err(super::upstream_error(status, &t));
         }
 
         // Use text() then manual parse so Content-Type mismatch doesn't cause spurious "bad json" errors
         let text = resp.text().await.map_err(|e| ConnError::Http(format!("read body: {e}")))?;
+        super::log_http_exchange("POST", &url, &body, status.as_u16(), &text);
         if text.trim().is_empty() {
             return Err(ConnError::Http("upstream returned empty response body".into()));
         }

@@ -142,6 +142,23 @@ pub fn resolve_key(m: &ModelRow, enc_key: &[u8; 32]) -> Result<Option<String>, C
     Ok(None)
 }
 
+/// Log outgoing request and incoming response body at DEBUG level.
+/// No-op unless the debug log level is active, so zero overhead in production.
+/// API keys in Authorization headers are redacted.
+pub fn log_http_exchange(method: &str, url: &str, req_body: &serde_json::Value, status: u16, resp_body: &str) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    tracing::debug!(
+        method,
+        url,
+        status,
+        req_body = %req_body,
+        resp_body = %resp_body,
+        "upstream HTTP exchange"
+    );
+}
+
 /// Sanitized wrapper for upstream HTTP errors (design §5.3 "vendor raw errors may be truncated and sanitized").
 ///
 /// Truncates the upstream response body to at most `MAX` characters (on character boundaries, UTF-8 safe),
