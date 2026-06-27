@@ -34,12 +34,25 @@ function MemberAnswers({ answers }: { answers: unknown[] }) {
     <div className="space-y-2">
       <p className="text-sm font-medium text-muted-foreground">成员回答（{answers.length}）</p>
       <div className="space-y-2">
-        {answers.map((a, i) => (
-          <div key={i} className="rounded border p-3 text-sm">
-            <span className="text-muted-foreground mr-2">#{i + 1}</span>
-            {toStr(a)}
-          </div>
-        ))}
+        {answers.map((a, i) => {
+          const ans = a as Record<string, unknown>
+          const usage = ans.usage as Record<string, unknown> | undefined
+          const tokens =
+            usage != null
+              ? Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0)
+              : undefined
+          return (
+            <div key={i} className="rounded border p-3 text-sm space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">#{i + 1}</span>
+                {truthy(ans.model_id) && <span className="font-mono text-xs">{String(ans.model_id)}</span>}
+                {usage?.status != null && <StatusBadge status={String(usage.status)} />}
+                {tokens != null && <span className="text-muted-foreground text-xs">{tokens} tok</span>}
+              </div>
+              <p className="whitespace-pre-wrap">{toStr(ans.text)}</p>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -72,6 +85,7 @@ function AttemptsTimeline({ attempts }: { attempts: unknown[] }) {
       <div className="space-y-2">
         {attempts.map((a, i) => {
           const attempt = a as Record<string, unknown>
+          const ok = attempt.ok === true
           return (
             <div key={i} className="flex items-start gap-3 rounded border p-3 text-sm">
               <span className="text-muted-foreground shrink-0">#{i + 1}</span>
@@ -79,7 +93,7 @@ function AttemptsTimeline({ attempts }: { attempts: unknown[] }) {
                 {truthy(attempt.model_id) && (
                   <span className="font-mono text-xs">{String(attempt.model_id)}</span>
                 )}
-                {truthy(attempt.status) && <StatusBadge status={String(attempt.status)} />}
+                {attempt.ok != null && <StatusBadge status={ok ? 'ok' : 'failed'} />}
                 {truthy(attempt.error) && (
                   <p className="text-destructive text-xs">{String(attempt.error)}</p>
                 )}
@@ -99,16 +113,18 @@ function CandidatesTable({ candidates }: { candidates: unknown[] }) {
       <div className="space-y-2">
         {candidates.map((c, i) => {
           const cand = c as Record<string, unknown>
+          const metric = (cand.metric ?? {}) as Record<string, unknown>
+          const throughput = metric.avg_throughput
+          const cost = metric.est_cost
           return (
             <div key={i} className="flex flex-wrap gap-4 rounded border p-3 text-sm">
               {truthy(cand.model_id) && <span className="font-mono text-xs">{String(cand.model_id)}</span>}
-              {cand.latency_secs != null && (
-                <span className="text-muted-foreground text-xs">延迟 {Number(cand.latency_secs).toFixed(3)}s</span>
+              {throughput != null && (
+                <span className="text-muted-foreground text-xs">吞吐 {Number(throughput).toFixed(1)} tok/s</span>
               )}
-              {cand.cost != null && (
-                <span className="text-muted-foreground text-xs">费用 ${Number(cand.cost).toFixed(6)}</span>
+              {cost != null && (
+                <span className="text-muted-foreground text-xs">预估成本 ${Number(cost).toFixed(6)}</span>
               )}
-              {truthy(cand.status) && <StatusBadge status={String(cand.status)} />}
             </div>
           )
         })}
@@ -124,15 +140,28 @@ function TurnsTimeline({ turns }: { turns: unknown[] }) {
       <div className="space-y-2">
         {turns.map((t, i) => {
           const turn = t as Record<string, unknown>
+          const isTool = truthy(turn.tool)
           return (
             <div key={i} className="rounded border p-3 text-sm">
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-muted-foreground text-xs">Turn {i + 1}</span>
-                {truthy(turn.model_id) && <span className="font-mono text-xs">{String(turn.model_id)}</span>}
-                {truthy(turn.status) && <StatusBadge status={String(turn.status)} />}
+                {isTool ? (
+                  <>
+                    <Badge variant="outline">tool</Badge>
+                    <span className="font-mono text-xs">{String(turn.tool)}</span>
+                    {truthy(turn.route) && (
+                      <span className="text-muted-foreground text-xs">→ {String(turn.route)}</span>
+                    )}
+                  </>
+                ) : (
+                  <Badge variant="outline">main</Badge>
+                )}
               </div>
-              {truthy(turn.content) && (
-                <p className="text-xs whitespace-pre-wrap">{toStr(turn.content)}</p>
+              {truthy(turn.main_output) && (
+                <p className="text-xs whitespace-pre-wrap">{toStr(turn.main_output)}</p>
+              )}
+              {truthy(turn.result) && (
+                <p className="text-xs whitespace-pre-wrap text-muted-foreground">{toStr(turn.result)}</p>
               )}
             </div>
           )

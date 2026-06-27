@@ -17,7 +17,7 @@ interface PriceRow {
   model_id: string
   price_in: number  // $/M tokens
   price_out: number // $/M tokens
-  updated_at: string // ISO
+  updated_at: number // Unix 秒
 }
 
 export function PricesTable() {
@@ -45,14 +45,14 @@ export function PricesTable() {
         <TableBody>
           {rows.length ? (
             rows.map((row) => {
-              const stale = now - new Date(row.updated_at).getTime() > sevenDaysMs
+              const stale = now - row.updated_at * 1000 > sevenDaysMs
               return (
                 <TableRow key={row.model_id} className={cn(stale && 'bg-yellow-50 dark:bg-yellow-950/20')}>
                   <TableCell className="font-mono text-xs">{row.model_id}</TableCell>
                   <TableCell>${row.price_in.toFixed(4)}</TableCell>
                   <TableCell>${row.price_out.toFixed(4)}</TableCell>
                   <TableCell className={cn('text-xs', stale && 'text-yellow-600 dark:text-yellow-400')}>
-                    {formatDistanceToNow(new Date(row.updated_at), { addSuffix: true, locale: zhCN })}
+                    {formatDistanceToNow(new Date(row.updated_at * 1000), { addSuffix: true, locale: zhCN })}
                     {stale && ' ⚠️'}
                   </TableCell>
                 </TableRow>

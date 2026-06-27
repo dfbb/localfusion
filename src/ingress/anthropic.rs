@@ -105,6 +105,11 @@ pub fn format_response(resp: &UnifiedResponse) -> Value {
     })
 }
 
+/// 按 Anthropic 协议格式化错误体（非流式）
+pub fn format_error(message: &str) -> Value {
+    json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}})
+}
+
 /// 将 UnifiedStreamEvent 转换为 Anthropic SSE data 行列表
 /// 注：v1 通过 sse_out 的 `data:` 帧统一发送，不单独输出 `event:` 行
 pub fn sse_events(ev: &UnifiedStreamEvent) -> Vec<String> {

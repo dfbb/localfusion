@@ -11,9 +11,22 @@ use crate::unified::{ConnError, UnifiedStream, UnifiedStreamEvent};
 /// SSE 事件翻译器 trait
 /// push：处理一个 JSON 块，返回零或多个统一事件
 /// finish：流结束时产出最终事件（如 Done{usage, call, ...}）
+/// fail：流中途失败时产出据实统计（status=Failed），默认基于 finish() 的用量改判失败
 pub trait SseTranslator: Send {
     fn push(&mut self, chunk: &Value) -> Result<Vec<UnifiedStreamEvent>, ConnError>;
     fn finish(&mut self) -> Vec<UnifiedStreamEvent>;
+    /// 流中途失败：取 finish() 已累计的据实用量，状态改为 Failed，
+    /// 返回供出口层落统计的 ModelUsage（已 Started 后失败也要记，见设计 §6.1）
+    fn fail(&mut self) -> Option<crate::unified::ModelUsage> {
+        use crate::unified::CallStatus;
+        for ev in self.finish() {
+            if let UnifiedStreamEvent::Done { call: Some(mut c), .. } = ev {
+                c.status = CallStatus::Failed;
+                return Some(c);
+            }
+        }
+        None
+    }
 }
 
 /// 同步发 POST + 状态码校验后 spawn 异步读取任务，返回 UnifiedStream
@@ -61,8 +74,12 @@ pub async fn run_egress(
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(e) => {
+                    let call = translator.fail();
                     let _ = tx
-                        .send(Err(ConnError::Http(format!("stream error: {e}"))))
+                        .send(Ok(UnifiedStreamEvent::Error {
+                            message: format!("stream error: {e}"),
+                            call,
+                        }))
                         .await;
                     return;
                 }
@@ -78,8 +95,12 @@ pub async fn run_egress(
                 let block = match std::str::from_utf8(&frame) {
                     Ok(s) => s.to_string(),
                     Err(e) => {
+                        let call = translator.fail();
                         let _ = tx
-                            .send(Err(ConnError::Http(format!("utf8: {e}"))))
+                            .send(Ok(UnifiedStreamEvent::Error {
+                                message: format!("utf8: {e}"),
+                                call,
+                            }))
                             .await;
                         return;
                     }
@@ -101,8 +122,12 @@ pub async fn run_egress(
                     let json: Value = match serde_json::from_str(data) {
                         Ok(v) => v,
                         Err(e) => {
+                            let call = translator.fail();
                             let _ = tx
-                                .send(Err(ConnError::Http(format!("bad json: {e}"))))
+                                .send(Ok(UnifiedStreamEvent::Error {
+                                    message: format!("bad json: {e}"),
+                                    call,
+                                }))
                                 .await;
                             return;
                         }
@@ -116,7 +141,13 @@ pub async fn run_egress(
                             }
                         }
                         Err(ce) => {
-                            let _ = tx.send(Err(ce)).await;
+                            let call = translator.fail();
+                            let _ = tx
+                                .send(Ok(UnifiedStreamEvent::Error {
+                                    message: ce.to_string(),
+                                    call,
+                                }))
+                                .await;
                             return;
                         }
                     }
@@ -152,13 +183,30 @@ mod tests {
     struct T;
     impl SseTranslator for T {
         fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<UnifiedStreamEvent>, ConnError> {
+            if chunk.get("boom").is_some() {
+                return Err(ConnError::Http("boom".into()));
+            }
             if let Some(t) = chunk.get("t").and_then(|v| v.as_str()) {
                 return Ok(vec![UnifiedStreamEvent::TextDelta { text: t.into() }]);
             }
             Ok(vec![])
         }
         fn finish(&mut self) -> Vec<UnifiedStreamEvent> {
-            vec![]
+            use crate::unified::{CallRole, CallStatus, ModelUsage, Usage};
+            vec![UnifiedStreamEvent::Done {
+                usage: Usage { input_tokens: 5, output_tokens: 7 },
+                call: Some(ModelUsage {
+                    model_id: "m1".into(),
+                    role: CallRole::Member,
+                    input_tokens: 5,
+                    output_tokens: 7,
+                    cost: 0.0,
+                    status: CallStatus::Ok,
+                    estimated: true,
+                    latency_secs: 0.0,
+                }),
+                finish_reason: None,
+            }]
         }
     }
 
@@ -216,5 +264,40 @@ mod tests {
         )
         .await;
         assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn mid_stream_failure_emits_error_with_failed_call() {
+        use crate::unified::CallStatus;
+        let server = wiremock::MockServer::start().await;
+        // 第二帧触发 translator.push 失败（已 Started 并产出过 token）
+        let body = "data: {\"t\":\"hi\"}\n\ndata: {\"boom\":1}\n\n";
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+        let mut s = run_egress(
+            format!("{}/v1", server.uri()),
+            reqwest::header::HeaderMap::new(),
+            serde_json::json!({}),
+            reqwest::Client::new(),
+            Box::new(T),
+            "m1".into(),
+        )
+        .await
+        .unwrap();
+        let mut err_call = None;
+        while let Some(ev) = s.rx.recv().await {
+            if let Ok(UnifiedStreamEvent::Error { call, .. }) = ev {
+                err_call = call;
+            }
+        }
+        // 中途失败必须产出 Error 事件，且携带 status=Failed 的据实用量（供统计）
+        let call = err_call.expect("expected Error event with call");
+        assert_eq!(call.status, CallStatus::Failed);
     }
 }

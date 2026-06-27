@@ -26,25 +26,22 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 interface RequestRow {
-  id: string
-  created_at: string
-  virtual_model: string | null
-  real_model: string | null
-  status: string
-  input_tokens: number
-  output_tokens: number
-  total_tokens: number
-  cost: number
-  latency_ms: number | null
+  id: number
+  created_at: number // Unix 秒
+  virtual_name: string | null
+  strategy: string | null
+  status: string | null
+  total_tokens: number | null
+  cost: number | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
   ok: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
   error: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-  timeout: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
+  degraded: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
 }
 
-const STATUSES = ['全部', 'ok', 'error', 'timeout']
+const STATUSES = ['全部', 'ok', 'degraded', 'error']
 
 const columns: ColumnDef<RequestRow>[] = [
   {
@@ -52,7 +49,7 @@ const columns: ColumnDef<RequestRow>[] = [
     header: '时间',
     cell: ({ getValue }) => (
       <span className="text-xs text-muted-foreground whitespace-nowrap">
-        {format(new Date(getValue<string>()), 'MM-dd HH:mm:ss')}
+        {format(new Date(getValue<number>() * 1000), 'MM-dd HH:mm:ss')}
       </span>
     ),
   },
@@ -60,7 +57,7 @@ const columns: ColumnDef<RequestRow>[] = [
     accessorKey: 'status',
     header: '状态',
     cell: ({ getValue }) => {
-      const s = getValue<string>()
+      const s = getValue<string | null>() ?? '-'
       return (
         <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${STATUS_COLORS[s] ?? 'bg-muted'}`}>
           {s}
@@ -69,26 +66,24 @@ const columns: ColumnDef<RequestRow>[] = [
     },
   },
   {
-    accessorKey: 'virtual_model',
+    accessorKey: 'virtual_name',
     header: '虚拟模型',
     cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string | null>() ?? '-'}</span>,
   },
   {
-    accessorKey: 'real_model',
-    header: '底层模型',
+    accessorKey: 'strategy',
+    header: '策略',
     cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string | null>() ?? '-'}</span>,
   },
-  { accessorKey: 'input_tokens', header: '输入 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-  { accessorKey: 'output_tokens', header: '输出 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-  { accessorKey: 'total_tokens', header: '总 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-  { accessorKey: 'cost', header: '费用', cell: ({ getValue }) => '$' + getValue<number>().toFixed(5) },
   {
-    accessorKey: 'latency_ms',
-    header: '延迟',
-    cell: ({ getValue }) => {
-      const v = getValue<number | null>()
-      return v != null ? v + 'ms' : '-'
-    },
+    accessorKey: 'total_tokens',
+    header: '总 Token',
+    cell: ({ getValue }) => (getValue<number | null>() ?? 0).toLocaleString(),
+  },
+  {
+    accessorKey: 'cost',
+    header: '费用',
+    cell: ({ getValue }) => '$' + (getValue<number | null>() ?? 0).toFixed(5),
   },
 ]
 

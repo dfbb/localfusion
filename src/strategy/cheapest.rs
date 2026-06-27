@@ -20,6 +20,9 @@ fn estimate_input_tokens(req: &UnifiedRequest) -> u64 {
 impl Strategy for Cheapest {
     fn name(&self) -> &str { "cheapest" }
     async fn execute(&self, ctx: StrategyCtx<'_>) -> Result<StrategyOutput, FusionError> {
+        if ctx.members.is_empty() {
+            return Err(FusionError::StrategyError("cheapest: no members".into()));
+        }
         let out_est = ctx.params.get("output_estimate_max").and_then(|v| v.as_u64()).unwrap_or(512);
         let in_est = estimate_input_tokens(&ctx.req);
         let mut best_idx = None::<usize>;

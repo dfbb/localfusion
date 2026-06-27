@@ -12,7 +12,11 @@ import { RequestsTable } from './components/requests-table'
 function defaultRange(): DateRange {
   const to = new Date()
   const from = subHours(to, 24)
-  return { from: from.toISOString(), to: to.toISOString(), granularity: 'hour' }
+  return {
+    from: Math.floor(from.getTime() / 1000),
+    to: Math.floor(to.getTime() / 1000),
+    granularity: 'hour',
+  }
 }
 
 export function Dashboard() {

@@ -35,9 +35,14 @@ pub(super) fn build_responses_request(req: &UnifiedRequest, ctx: &EgressCtx) -> 
                     _ => None,
                 })
                 .collect();
+            // assistant 历史消息的内容部件应为 output_text，user/system/tool 为 input_text
+            let content_type = match role {
+                Role::Assistant => "output_text",
+                _ => "input_text",
+            };
             input.push(json!({
                 "role": role_s,
-                "content": [{"type": "input_text", "text": text}]
+                "content": [{"type": content_type, "text": text}]
             }));
         }
     }
