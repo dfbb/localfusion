@@ -55,7 +55,7 @@ export const sidebarData: SidebarData = {
       items: [
         {
           title: '监控',
-          url: '/monitor',
+          url: '/',
           icon: Activity,
         },
         {
