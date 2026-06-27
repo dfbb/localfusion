@@ -53,8 +53,8 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       }
       setTestResults(map)
       if (fixedCount > 0) {
-        // connector/base_url was auto-corrected in the DB; refresh the table to show new values
-        qc.invalidateQueries({ queryKey: ['models'] })
+        // connector/base_url was auto-corrected in the DB; force an immediate refetch
+        await qc.refetchQueries({ queryKey: ['models'] })
         toast.success(`Auto-corrected config for ${fixedCount} model(s)`)
       }
     } catch (err: unknown) {
