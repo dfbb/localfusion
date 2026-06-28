@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import {
   LineChart,
@@ -51,6 +52,7 @@ interface Props {
 }
 
 export function UsageChart({ range }: Props) {
+  const { t } = useTranslation()
   const { data: rows = [], isLoading } = useQuery<UsageRow[]>({
     queryKey: ['usage', range.from, range.to, range.granularity],
     queryFn: () =>
@@ -92,8 +94,8 @@ export function UsageChart({ range }: Props) {
         <Tooltip
           formatter={(value, name) =>
             name === 'total_tokens'
-              ? [(value as number).toLocaleString() + ' tokens', 'Token']
-              : ['$' + (value as number).toFixed(4), '费用']
+              ? [(value as number).toLocaleString() + ' tokens', t('dashboard.colTotalTokens')]
+              : ['$' + (value as number).toFixed(4), t('dashboard.costTooltip')]
           }
         />
         <Legend />

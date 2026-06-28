@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnDef,
@@ -73,23 +74,20 @@ function useAggData(scope: 'real' | 'virtual', range: DateRange) {
   return { agg, isLoading }
 }
 
-function buildColumns(reqLabel: string): ColumnDef<AggRow>[] {
-  return [
-    { accessorKey: 'name', header: '模型', cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string>()}</span> },
-    { accessorKey: 'requests', header: reqLabel },
-    { accessorKey: 'input_tokens', header: '输入 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-    { accessorKey: 'output_tokens', header: '输出 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-    { accessorKey: 'total_tokens', header: '总 Token', cell: ({ getValue }) => getValue<number>().toLocaleString() },
-    { accessorKey: 'cost', header: '费用', cell: ({ getValue }) => '$' + getValue<number>().toFixed(4) },
-    { accessorKey: 'errors', header: '错误' },
-  ]
-}
-
 function RankingTable({ scope, range }: { scope: 'real' | 'virtual'; range: DateRange }) {
+  const { t } = useTranslation()
   const [sorting, setSorting] = useState<SortingState>([{ id: 'total_tokens', desc: true }])
   const { agg, isLoading } = useAggData(scope, range)
-  const reqLabel = scope === 'real' ? '底层调用数' : '请求数'
-  const columns = useMemo(() => buildColumns(reqLabel), [reqLabel])
+
+  const columns = useMemo<ColumnDef<AggRow>[]>(() => [
+    { accessorKey: 'name', header: t('dashboard.colModel'), cell: ({ getValue }) => <span className="font-mono text-xs">{getValue<string>()}</span> },
+    { accessorKey: 'requests', header: scope === 'real' ? t('dashboard.colRealRequests') : t('dashboard.colRequests') },
+    { accessorKey: 'input_tokens', header: t('dashboard.colInputTokens'), cell: ({ getValue }) => getValue<number>().toLocaleString() },
+    { accessorKey: 'output_tokens', header: t('dashboard.colOutputTokens'), cell: ({ getValue }) => getValue<number>().toLocaleString() },
+    { accessorKey: 'total_tokens', header: t('dashboard.colTotalTokens'), cell: ({ getValue }) => getValue<number>().toLocaleString() },
+    { accessorKey: 'cost', header: t('dashboard.colCost'), cell: ({ getValue }) => '$' + getValue<number>().toFixed(4) },
+    { accessorKey: 'errors', header: t('dashboard.colErrors') },
+  ], [t, scope])
 
   const table = useReactTable({
     data: agg,
@@ -135,7 +133,7 @@ function RankingTable({ scope, range }: { scope: 'real' | 'virtual'; range: Date
           ) : (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground text-sm">
-                暂无数据
+                {t('common.noData')}
               </TableCell>
             </TableRow>
           )}
@@ -150,11 +148,12 @@ interface Props {
 }
 
 export function UsageRanking({ range }: Props) {
+  const { t } = useTranslation()
   return (
     <Tabs defaultValue="real">
       <TabsList>
-        <TabsTrigger value="real">真实模型</TabsTrigger>
-        <TabsTrigger value="virtual">虚拟模型</TabsTrigger>
+        <TabsTrigger value="real">{t('dashboard.tabRealModels')}</TabsTrigger>
+        <TabsTrigger value="virtual">{t('dashboard.tabVirtualModels')}</TabsTrigger>
       </TabsList>
       <TabsContent value="real" className="mt-4">
         <RankingTable scope="real" range={range} />

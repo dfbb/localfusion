@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { TrendingUp, Hash, ArrowDownUp, DollarSign, Layers } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -18,22 +19,23 @@ function fmt(n: number) {
   return String(n)
 }
 
-const CARDS = [
-  { key: 'requests' as const, label: '请求数', icon: Hash, format: fmt },
-  { key: 'input_tokens' as const, label: '输入 Token', icon: ArrowDownUp, format: fmt },
-  { key: 'output_tokens' as const, label: '输出 Token', icon: TrendingUp, format: fmt },
-  { key: 'total_tokens' as const, label: '总 Token', icon: Layers, format: fmt },
-  {
-    key: 'cost' as const, label: '总费用', icon: DollarSign,
-    format: (v: number) => '$' + v.toFixed(4),
-  },
-]
-
 export function SummaryCards() {
+  const { t } = useTranslation()
   const { data, isLoading } = useQuery<Summary>({
     queryKey: ['usage-summary'],
     queryFn: () => api.get('/stats/usage/summary').then((r) => r.data),
   })
+
+  const CARDS = [
+    { key: 'requests' as const, label: t('dashboard.cardRequests'), icon: Hash, format: fmt },
+    { key: 'input_tokens' as const, label: t('dashboard.cardInputTokens'), icon: ArrowDownUp, format: fmt },
+    { key: 'output_tokens' as const, label: t('dashboard.cardOutputTokens'), icon: TrendingUp, format: fmt },
+    { key: 'total_tokens' as const, label: t('dashboard.cardTotalTokens'), icon: Layers, format: fmt },
+    {
+      key: 'cost' as const, label: t('dashboard.cardTotalCost'), icon: DollarSign,
+      format: (v: number) => '$' + v.toFixed(4),
+    },
+  ]
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
