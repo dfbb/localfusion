@@ -31,40 +31,40 @@ export const sidebarData: SidebarData = {
   appLogo: Command,
   navGroups: [
     {
-      title: '配置',
+      title: 'nav.groupConfig',
       items: [
         {
-          title: '真实模型',
+          title: 'nav.models',
           url: '/models',
           icon: Bot,
         },
         {
-          title: '虚拟模型',
+          title: 'nav.virtualModels',
           url: '/virtual-models',
           icon: BrainCircuit,
         },
         {
-          title: '密钥 / ACL',
+          title: 'nav.keys',
           url: '/keys',
           icon: KeyRound,
         },
       ],
     },
     {
-      title: '运维',
+      title: 'nav.groupOps',
       items: [
         {
-          title: '监控',
+          title: 'nav.dashboard',
           url: '/',
           icon: Activity,
         },
         {
-          title: '调试台',
+          title: 'nav.playground',
           url: '/playground',
           icon: Terminal,
         },
         {
-          title: '设置',
+          title: 'nav.settings',
           url: '/settings',
           icon: Settings,
         },
