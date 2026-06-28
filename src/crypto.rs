@@ -6,6 +6,14 @@
 //! - Hash: SHA-256 (used for ingress key / admin token storage)
 //!
 //! **Security contract**: plaintext keys must never appear in logs; error messages must not leak key material.
+//!
+//! **At-rest trust boundary**: the encryption key is derived from the host machine-id with a
+//! salt stored alongside the ciphertext in the same SQLite DB. This protects a DB file that is
+//! exfiltrated on its own (e.g. a stray backup), but it does NOT defend against an attacker with
+//! local read access on the same host — they can read the machine-id and the salt and re-derive
+//! the key. The DB file is therefore also restricted to 0600 (see `db::restrict_db_permissions`).
+//! For stronger at-rest protection, supply the key material out-of-band (env/keychain) instead of
+//! deriving it from the machine-id.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chacha20poly1305::aead::{Aead, KeyInit};
@@ -33,6 +41,21 @@ pub fn sha256_hex(input: &str) -> String {
     let mut h = Sha256::new();
     h.update(input.as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Constant-time equality for two byte slices.
+///
+/// Used to compare secret-derived hashes (admin token / ingress key) without leaking, via
+/// early-exit timing, how many leading bytes matched. Differing lengths return false but
+/// still scan the shorter input so the loop count does not branch on the secret content.
+pub fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    let n = a.len().min(b.len());
+    for i in 0..n {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
 }
 
 /// Derive a 32-byte encryption key from the machine ID via HKDF-SHA256.
@@ -111,6 +134,16 @@ mod tests {
             sha256_hex("abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn constant_time_eq_matches_and_rejects() {
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        // Differing lengths are unequal and do not panic.
+        assert!(!constant_time_eq("abc", "abcd"));
+        assert!(!constant_time_eq("", "x"));
+        assert!(constant_time_eq("", ""));
     }
 
     #[test]

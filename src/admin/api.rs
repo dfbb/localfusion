@@ -85,6 +85,7 @@ async fn upsert_from_body(
         .and_then(|v| v.as_str())
         .ok_or_else(|| FusionError::InvalidRequest("base_url required".into()))?
         .to_string();
+    validate_base_url(&base_url)?;
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
@@ -112,6 +113,57 @@ async fn upsert_from_body(
         extra: body.get("extra").map(|v| v.to_string()),
     };
     s.db.model_upsert(&row).await
+}
+
+/// Validate a model `base_url` before persisting it.
+///
+/// `base_url` drives server-side outbound requests (inference egress + connectivity
+/// probe), so an unvalidated value is an SSRF vector. LocalFusion legitimately targets
+/// local/LAN model servers (Ollama, llama.cpp, LM Studio), so loopback and private
+/// ranges are intentionally allowed. What is rejected is the link-local range
+/// `169.254.0.0/16` / `fe80::/10` — no real LLM upstream lives there, but the cloud
+/// metadata endpoint `169.254.169.254` does, making it a pure attack target.
+/// Set `LOCALFUSION_ALLOW_LINK_LOCAL=1` to override (e.g. for testing).
+fn validate_base_url(base_url: &str) -> Result<(), crate::error::FusionError> {
+    use crate::error::FusionError;
+    use std::net::IpAddr;
+
+    let url = reqwest::Url::parse(base_url)
+        .map_err(|e| FusionError::InvalidRequest(format!("invalid base_url: {e}")))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => {
+            return Err(FusionError::InvalidRequest(format!(
+                "base_url scheme must be http or https, got '{other}'"
+            )))
+        }
+    }
+    if std::env::var("LOCALFUSION_ALLOW_LINK_LOCAL").as_deref() == Ok("1") {
+        return Ok(());
+    }
+    // Reject link-local literals (the cloud metadata range) when the host is an IP.
+    // url::host_str() returns IPv6 literals wrapped in brackets, so strip them first.
+    if let Some(host) = url.host_str() {
+        let bare = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+        if let Ok(ip) = bare.parse::<IpAddr>() {
+            let link_local = match ip {
+                IpAddr::V4(v4) => v4.is_link_local(),
+                // IPv6 link-local fe80::/10; also catch IPv4-mapped link-local.
+                IpAddr::V6(v6) => {
+                    (v6.segments()[0] & 0xffc0) == 0xfe80
+                        || v6.to_ipv4().is_some_and(|m| m.is_link_local())
+                }
+            };
+            if link_local {
+                return Err(FusionError::InvalidRequest(
+                    "base_url points at a link-local address (169.254.0.0/16 / fe80::/10); \
+                     this is blocked to prevent SSRF against cloud metadata endpoints"
+                        .into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn delete_model(
@@ -200,11 +252,18 @@ const PROBE_MAX_TOKENS: u32 = 1_000_000;
 /// reachable endpoint look unreachable.
 const PING_MAX_TOKENS: u32 = 8;
 
-/// Extract the largest integer appearing in an upstream error message. Used to recover the
-/// real max output token limit from rejections like
-/// `the valid range of max_tokens is [1, 393216]` — the largest number is the upper bound.
-/// Returns None if no plausible (>= 1024) integer is present.
-fn parse_max_tokens_limit(msg: &str) -> Option<u32> {
+/// Extract the real max output token limit from an upstream rejection message.
+///
+/// Providers reject an oversized `max_tokens` in two common shapes:
+///   - stating the valid range, e.g. `the valid range of max_tokens is [1, 393216]`
+///   - echoing the rejected value, e.g. `max_tokens 1000000 exceeds the maximum of 4096`
+///
+/// We take the largest plausible (>= 1024) integer in the message, but EXCLUDE `sent`
+/// (the value we just probed with) — otherwise the echoed request value would win and the
+/// confirmation re-probe with that same value would fail again, leaving detection silently
+/// broken for every provider that echoes the request.
+/// Returns None if no usable integer is present.
+fn parse_max_tokens_limit(msg: &str, sent: u32) -> Option<u32> {
     let mut best: Option<u64> = None;
     let mut cur = String::new();
     // Walk the string, collecting maximal digit runs; track the largest value seen.
@@ -213,7 +272,9 @@ fn parse_max_tokens_limit(msg: &str) -> Option<u32> {
             cur.push(ch);
         } else if !cur.is_empty() {
             if let Ok(n) = cur.parse::<u64>() {
-                best = Some(best.map_or(n, |b| b.max(n)));
+                if n != sent as u64 {
+                    best = Some(best.map_or(n, |b| b.max(n)));
+                }
             }
             cur.clear();
         }
@@ -230,6 +291,29 @@ fn extra_with_max_tokens(extra: Option<&str>, max_tokens: u32) -> String {
         .unwrap_or_default();
     obj.insert("default_max_tokens".into(), serde_json::json!(max_tokens));
     serde_json::Value::Object(obj).to_string()
+}
+
+/// Decide whether a probe response actually looks like a model completion, rather than
+/// an arbitrary 200 from a gateway/health page/different API that happens to answer the path.
+///
+/// The connector parsers are lenient (`unwrap_or` throughout), so a non-completion 200 still
+/// yields an `Ok(UnifiedResponse)` — just an empty one. A genuine reply to the "ping" probe
+/// has either some assistant text or a usage block, so we require at least one of those.
+/// Without this, the candidate loop could short-circuit on a wrong (connector, base_url) pair
+/// and persist it, silently corrupting how all future traffic to the model is translated.
+fn response_looks_like_completion(resp: &crate::unified::UnifiedResponse) -> bool {
+    let has_text = resp.items.iter().any(|item| {
+        if let crate::unified::Item::Message { content, .. } = item {
+            content.iter().any(|c| matches!(c, crate::unified::ContentBlock::Text(t) if !t.is_empty()))
+        } else {
+            false
+        }
+    });
+    let has_usage = resp.usage.input_tokens > 0
+        || resp.usage.output_tokens > 0
+        // estimated == false means the upstream returned a real usage block.
+        || resp.calls.iter().any(|c| !c.estimated);
+    has_text || has_usage
 }
 
 /// Run one probe request against (kind, base_url, model_name, max_tokens). Returns Ok(latency_ms) or Err(message).
@@ -257,11 +341,16 @@ async fn probe_attempt(
     let req = crate::probe::probe_request_with(max_tokens);
     let connector = make_connector(kind);
     let start = std::time::Instant::now();
-    connector
+    let resp = connector
         .complete(&req, &egress)
         .await
-        .map(|_| start.elapsed().as_millis() as u64)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // A 200 that doesn't parse into a recognizable completion means this connector is the
+    // wrong format for the endpoint — reject it so the candidate loop keeps searching.
+    if !response_looks_like_completion(&resp) {
+        return Err("upstream 200 but response is not a recognizable completion".into());
+    }
+    Ok(start.elapsed().as_millis() as u64)
 }
 
 /// Probe a single model row. Steps:
@@ -329,7 +418,7 @@ async fn probe_one(
     match probe_attempt(work_kind, &work_base, &m.model, &key, av, PROBE_MAX_TOKENS, http).await {
         Ok(_) => max_tokens = Some(PROBE_MAX_TOKENS),
         Err(e) => {
-            if let Some(limit) = parse_max_tokens_limit(&e) {
+            if let Some(limit) = parse_max_tokens_limit(&e, PROBE_MAX_TOKENS) {
                 if probe_attempt(work_kind, &work_base, &m.model, &key, av, limit, http).await.is_ok() {
                     max_tokens = Some(limit);
                 }
@@ -1006,7 +1095,10 @@ async fn put_logging(
 
 #[cfg(test)]
 mod tests {
-    use super::{base_url_candidates, extra_with_max_tokens, parse_max_tokens_limit};
+    use super::{
+        base_url_candidates, extra_with_max_tokens, parse_max_tokens_limit,
+        response_looks_like_completion, validate_base_url,
+    };
     use serde_json::Value;
 
     #[test]
@@ -1061,7 +1153,7 @@ mod tests {
     fn parse_limit_picks_largest_integer() {
         // DeepSeek-style rejection: "[1, 393216]" → 393216 is the real output cap.
         assert_eq!(
-            parse_max_tokens_limit("the valid range of max_tokens is [1, 393216]"),
+            parse_max_tokens_limit("the valid range of max_tokens is [1, 393216]", 1_000_000),
             Some(393216)
         );
     }
@@ -1069,7 +1161,102 @@ mod tests {
     #[test]
     fn parse_limit_ignores_small_or_absent() {
         // No plausible (>=1024) integer present.
-        assert_eq!(parse_max_tokens_limit("model not found"), None);
-        assert_eq!(parse_max_tokens_limit("range is [1, 8]"), None);
+        assert_eq!(parse_max_tokens_limit("model not found", 1_000_000), None);
+        assert_eq!(parse_max_tokens_limit("range is [1, 8]", 1_000_000), None);
+    }
+
+    #[test]
+    fn parse_limit_excludes_echoed_sent_value() {
+        // Provider echoes the rejected request value: "max_tokens 1000000 exceeds the maximum of 4096".
+        // The largest integer is the echoed 1000000 — excluding `sent` lets the real cap (4096) win.
+        assert_eq!(
+            parse_max_tokens_limit("max_tokens 1000000 exceeds the maximum of 4096", 1_000_000),
+            Some(4096)
+        );
+        // "you requested 1000000, limit is 128000"
+        assert_eq!(
+            parse_max_tokens_limit("you requested 1000000, limit is 128000", 1_000_000),
+            Some(128000)
+        );
+        // If the ONLY integer present is the echoed sent value, there is nothing usable to parse.
+        assert_eq!(
+            parse_max_tokens_limit("max_tokens 1000000 is too large", 1_000_000),
+            None
+        );
+    }
+
+    #[test]
+    fn validate_base_url_accepts_http_https_and_local() {
+        assert!(validate_base_url("https://api.openai.com/v1").is_ok());
+        assert!(validate_base_url("http://api.openai.com").is_ok());
+        // Local/LAN model servers are a primary use case — must be allowed.
+        assert!(validate_base_url("http://127.0.0.1:11434").is_ok());
+        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
+        assert!(validate_base_url("http://192.168.1.50:1234").is_ok());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_bad_scheme_and_garbage() {
+        assert!(validate_base_url("ftp://x.com").is_err());
+        assert!(validate_base_url("file:///etc/passwd").is_err());
+        assert!(validate_base_url("not a url").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_link_local_metadata() {
+        // The cloud metadata endpoint and its range.
+        assert!(validate_base_url("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(validate_base_url("http://169.254.0.1").is_err());
+        // IPv6 link-local.
+        assert!(validate_base_url("http://[fe80::1]").is_err());
+    }
+
+    #[test]
+    fn completion_check_accepts_text_or_usage() {
+        use crate::unified::*;
+        let with_text = UnifiedResponse {
+            items: vec![Item::Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text("pong".into())],
+            }],
+            usage: Usage { input_tokens: 0, output_tokens: 0 },
+            model_id: "m".into(),
+            calls: vec![],
+        };
+        assert!(response_looks_like_completion(&with_text));
+
+        let with_usage = UnifiedResponse {
+            items: vec![Item::Message { role: Role::Assistant, content: vec![] }],
+            usage: Usage { input_tokens: 3, output_tokens: 1 },
+            model_id: "m".into(),
+            calls: vec![],
+        };
+        assert!(response_looks_like_completion(&with_usage));
+    }
+
+    #[test]
+    fn completion_check_rejects_empty_200() {
+        use crate::unified::*;
+        // A gateway/health 200 parses into an empty message with no usage — must be rejected
+        // so the wrong connector is never persisted.
+        let empty = UnifiedResponse {
+            items: vec![Item::Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text(String::new())],
+            }],
+            usage: Usage { input_tokens: 0, output_tokens: 0 },
+            model_id: "m".into(),
+            calls: vec![ModelUsage {
+                model_id: "m".into(),
+                role: CallRole::Member,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: 0.0,
+                status: CallStatus::Ok,
+                estimated: true,
+                latency_secs: 0.0,
+            }],
+        };
+        assert!(!response_looks_like_completion(&empty));
     }
 }

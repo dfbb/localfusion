@@ -45,6 +45,7 @@ type ModelsContextType = {
   setCurrentRow: React.Dispatch<React.SetStateAction<ModelRow | null>>
   testing: boolean
   testResults: Map<string, TestResult>
+  testingIds: Set<string>
   runTestAll: () => Promise<void>
   runTestOne: (id: string) => void
 }
@@ -57,6 +58,8 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
   const [currentRow, setCurrentRow] = useState<ModelRow | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map())
+  // Ids with an in-flight single-model probe (drives the per-row pending indicator).
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
 
   async function runTestAll() {
     setTesting(true)
@@ -91,6 +94,7 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       next.delete(id)
       return next
     })
+    setTestingIds(prev => new Set(prev).add(id))
     try {
       const resp = await api.post<ProbeResponseItem>(`/models/${id}/test`)
       const item = resp.data
@@ -102,11 +106,17 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
       }
     } catch {
       // silently ignore — the user didn't explicitly request this test
+    } finally {
+      setTestingIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
   return (
-    <ModelsContext value={{ open, setOpen, currentRow, setCurrentRow, testing, testResults, runTestAll, runTestOne }}>
+    <ModelsContext value={{ open, setOpen, currentRow, setCurrentRow, testing, testResults, testingIds, runTestAll, runTestOne }}>
       {children}
     </ModelsContext>
   )

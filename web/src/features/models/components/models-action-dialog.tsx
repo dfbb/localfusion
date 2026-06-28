@@ -333,7 +333,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
               placeholder="1000000"
             />
             <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
-              上下文窗口（输入上限），默认 1,000,000
+              上下文窗口（输入上限），默认 1,000,000，仅作记录参考，不强制校验
             </p>
           </div>
 

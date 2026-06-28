@@ -166,9 +166,13 @@ pub fn resolve_key(m: &ModelRow, enc_key: &[u8; 32]) -> Result<Option<String>, C
     Ok(None)
 }
 
-/// Log outgoing request and incoming response body at DEBUG level.
-/// No-op unless the debug log level is active, so zero overhead in production.
-/// API keys in Authorization headers are redacted.
+/// Log the outgoing request and incoming response body at DEBUG level.
+/// No-op unless the DEBUG log level is active, so there is zero overhead in production.
+///
+/// PRIVACY: this logs full prompt and completion bodies in plaintext. Auth headers are
+/// never logged (they aren't passed in), so API keys do not leak here — but prompts and
+/// model output may contain user/PII content. DEBUG is therefore opt-in (DB `log_level`
+/// or the `--debug` flag) and should not be enabled against a shared log sink in production.
 pub fn log_http_exchange(method: &str, url: &str, req_body: &serde_json::Value, status: u16, resp_body: &str) {
     if !tracing::enabled!(tracing::Level::DEBUG) {
         return;

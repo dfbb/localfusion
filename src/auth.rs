@@ -6,7 +6,7 @@
 
 use axum::http::HeaderMap;
 
-use crate::crypto::sha256_hex;
+use crate::crypto::{constant_time_eq, sha256_hex};
 use crate::db::Db;
 use crate::error::FusionError;
 
@@ -52,7 +52,7 @@ pub async fn authorize_ingress(
 pub fn verify_admin(db_token_hash: &str, headers: &HeaderMap) -> Result<(), FusionError> {
     let token = extract_bearer(headers)
         .ok_or_else(|| FusionError::Unauthorized("missing admin token".into()))?;
-    if sha256_hex(&token) == db_token_hash {
+    if constant_time_eq(&sha256_hex(&token), db_token_hash) {
         Ok(())
     } else {
         Err(FusionError::Unauthorized("bad admin token".into()))

@@ -10,6 +10,20 @@ use crate::unified::{CallRecorder, StrategyTrace, UnifiedRequest};
 #[cfg(test)]
 type MockFn = std::sync::Arc<dyn Fn(&str) -> MemberHandle + Send + Sync>;
 
+/// Build the egress HTTP client used for all upstream inference requests.
+///
+/// Redirects are disabled: the Anthropic connector authenticates with a custom
+/// `x-api-key` header, which reqwest does NOT strip on cross-host redirects (it only
+/// strips `Authorization`/`Cookie`/`Proxy-Authorization`). Following a 3xx from a
+/// configured `base_url` to an attacker-controlled host would therefore leak the
+/// decrypted upstream key. Surfacing redirects as errors prevents that.
+fn egress_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default()
+}
+
 /// Model resolver: parses a model_id into a callable MemberHandle (decrypt key + connector + egress)
 #[derive(Clone)]
 pub struct ModelResolver {
@@ -26,7 +40,7 @@ impl ModelResolver {
         ModelResolver {
             db,
             enc_key,
-            http: reqwest::Client::new(),
+            http: egress_client(),
             #[cfg(test)]
             mock: None,
         }
@@ -38,7 +52,7 @@ impl ModelResolver {
         ModelResolver {
             db,
             enc_key: [0u8; 32],
-            http: reqwest::Client::new(),
+            http: egress_client(),
             mock: Some(std::sync::Arc::new(f)),
         }
     }

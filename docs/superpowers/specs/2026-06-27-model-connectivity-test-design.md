@@ -128,3 +128,66 @@ User clicks "Test All"
 - Error strings are sanitized (truncated, no raw secrets) before leaving the backend.
 - The endpoint is admin-token-gated; no inference-key access.
 - No new dependencies.
+
+---
+
+## Addendum — v0.1.3 (auto-correction + token probing)
+
+The shipped feature went beyond the original "in-memory only" scope above. This addendum
+documents the actual behavior; where it conflicts with the sections above, the addendum wins.
+
+### New endpoint
+
+- `POST /admin/api/models/:id/test` — probe a single model (in addition to `test-all`).
+  The edit dialog fires this automatically after a successful save, so a corrected
+  `base_url`/`connector` is detected without a manual click.
+
+### Auto-correction is persisted (DB writes)
+
+`probe_one` no longer just measures latency. It:
+
+1. **Finds a working `(connector, base_url)`** by trying the configured combo first, then
+   variants: `/v1` suffix toggled, and `http`→`https` upgrade. Reachability probes use a tiny
+   `max_tokens` (`PING_MAX_TOKENS = 8`) so an oversized value never makes a reachable endpoint
+   look unreachable. A candidate is only accepted if the 200 response **parses into a
+   recognizable completion** (has assistant text or a usage block) — a bare/health-page 200 is
+   rejected so a wrong connector is never promoted.
+2. **Probes the max output-token cap**: sends `PROBE_MAX_TOKENS = 1_000_000`; if rejected, parses
+   the real upper bound from the error message (e.g. `[1, 393216]` → 393216), excluding the
+   echoed request value, and re-probes to confirm before trusting it.
+3. **Persists** any changed `connector` / `base_url` / `extra.default_max_tokens` via
+   `model_upsert`. The frontend refetches `['models']` after a successful probe so the table and
+   edit dialog reflect the corrected values.
+
+The probe HTTP client (and the production egress client) use
+`reqwest::redirect::Policy::none()` so an `http`→`https` redirect surfaces as a failure and the
+`https` candidate is tried/persisted instead of being silently followed (which would also leak
+the Anthropic `x-api-key` to the redirect target).
+
+### Input vs output token limits (`extra`)
+
+Two distinct keys are stored in the `extra` JSON column:
+
+- `default_max_tokens` — auto-detected **output** cap (step 2). Read-only in the UI. Used as the
+  request default when a client omits `max_tokens` (`req.max_tokens.or(ctx.default_max_tokens)`),
+  and as Anthropic's required `max_tokens`. **Note:** this means a probed model's
+  unspecified-`max_tokens` requests now default to the detected cap rather than the prior
+  hard-coded 1024 (Anthropic) / provider default (OpenAI).
+- `max_input_tokens` — user-editable **context window**, default 1,000,000. Informational only:
+  it is **not** read by the backend or enforced (no tokenizer), so it does not gate requests.
+
+### Backward compatibility
+
+Both `extra` keys are optional. Rows without them behave as before: no output default is applied
+and the input field shows its 1M default. No schema migration is required (the `extra` column
+already exists).
+
+### Security hardening (v0.1.3)
+
+- `base_url` is validated on write: must be `http`/`https`, and link-local addresses
+  (`169.254.0.0/16` / `fe80::/10`, the cloud-metadata range) are rejected to prevent SSRF.
+  Loopback/LAN targets remain allowed (local model servers are a primary use case).
+  Override with `LOCALFUSION_ALLOW_LINK_LOCAL=1`.
+- Non-loopback server binds are refused unless `--allow-remote` is passed (traffic is plaintext
+  HTTP; front with a TLS proxy when exposing remotely).
+- Admin-token hash comparison is constant-time.

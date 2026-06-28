@@ -19,10 +19,11 @@ import { type ModelRow } from '../data/schema'
 import { useModels } from './models-provider'
 
 function StatusCell({ modelId }: { modelId: string }) {
-  const { testing, testResults } = useModels()
+  const { testing, testResults, testingIds } = useModels()
   const result = testResults.get(modelId)
 
-  if (testing && !result) {
+  // Pending during a bulk test-all (no result yet) or a single-model probe for this row.
+  if ((testing || testingIds.has(modelId)) && !result) {
     return <span className="text-muted-foreground text-sm">⋯</span>
   }
   if (!result) {

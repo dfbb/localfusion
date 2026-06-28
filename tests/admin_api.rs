@@ -220,3 +220,173 @@ async fn test_all_models_empty_db_returns_empty_array() {
     assert!(body.is_array());
     assert_eq!(body.as_array().unwrap().len(), 0); // no models in empty DB
 }
+
+// ─── probe integration (wiremock-backed) ─────────────────────────────────────
+
+/// Build an app sharing a specific Db, so a test can seed a model and then assert the
+/// probe's persistence side effects on the same DB.
+async fn app_with_db(db: &Db) -> axum::Router {
+    db.setting_set("admin_token_hash", &localfusion::crypto::sha256_hex("adm"))
+        .await
+        .unwrap();
+    let log = Arc::new(localfusion::logging::init("info", None, false));
+    router(AdminState {
+        db: db.clone(),
+        log,
+        enc_key: [0u8; 32],
+    })
+}
+
+async fn probe_one_model(app: axum::Router, id: &str) -> serde_json::Value {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let r = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/api/models/{id}/test"))
+                .header("Authorization", "Bearer adm")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn probe_detects_and_persists_v1_fixup() {
+    use localfusion::db::models::ModelRow;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Upstream only answers at /v1/chat/completions, not /chat/completions.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        })))
+        .mount(&server)
+        .await;
+
+    let db = Db::open_memory().await.unwrap();
+    std::env::set_var("PROBE_IT_KEY", "k");
+    // Configured base_url lacks the /v1 segment — the probe should discover and persist it.
+    db.model_upsert(&ModelRow {
+        id: "m".into(),
+        connector: "chat".into(),
+        base_url: server.uri(),
+        api_key_enc: None,
+        api_key_env: Some("PROBE_IT_KEY".into()),
+        model: "gpt".into(),
+        anthropic_version: None,
+        extra: None,
+    })
+    .await
+    .unwrap();
+
+    let app = app_with_db(&db).await;
+    let result = probe_one_model(app, "m").await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["base_url_fixed"], format!("{}/v1", server.uri()));
+
+    // Persistence: the DB row now carries the corrected base_url.
+    let row = db.model_get("m").await.unwrap().unwrap();
+    assert_eq!(row.base_url, format!("{}/v1", server.uri()));
+}
+
+#[tokio::test]
+async fn probe_rejects_wrong_shaped_200() {
+    use localfusion::db::models::ModelRow;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // Every path returns a 200 that is NOT a completion (e.g. a gateway health page).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "message": "ok"
+        })))
+        .mount(&server)
+        .await;
+
+    let db = Db::open_memory().await.unwrap();
+    std::env::set_var("PROBE_IT_KEY2", "k");
+    db.model_upsert(&ModelRow {
+        id: "m".into(),
+        connector: "chat".into(),
+        base_url: server.uri(),
+        api_key_enc: None,
+        api_key_env: Some("PROBE_IT_KEY2".into()),
+        model: "gpt".into(),
+        anthropic_version: None,
+        extra: None,
+    })
+    .await
+    .unwrap();
+
+    let app = app_with_db(&db).await;
+    let result = probe_one_model(app, "m").await;
+    // A bare non-completion 200 must NOT be accepted as a working connector.
+    assert_eq!(result["ok"], false);
+
+    // Persistence: the connector must be left unchanged (no wrong combo written).
+    let row = db.model_get("m").await.unwrap().unwrap();
+    assert_eq!(row.connector, "chat");
+}
+
+#[tokio::test]
+async fn probe_parses_and_persists_output_cap_from_error() {
+    use localfusion::db::models::ModelRow;
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    // The 1M probe is rejected with the real cap stated in the error.
+    Mock::given(method("POST"))
+        .and(body_string_contains("1000000"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {"message": "the valid range of max_tokens is [1, 393216]"}
+        })))
+        .mount(&server)
+        .await;
+    // Any other max_tokens (the reachability ping and the 393216 confirm) succeeds.
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        })))
+        .mount(&server)
+        .await;
+
+    let db = Db::open_memory().await.unwrap();
+    std::env::set_var("PROBE_IT_KEY3", "k");
+    db.model_upsert(&ModelRow {
+        id: "m".into(),
+        connector: "chat".into(),
+        base_url: format!("{}/v1", server.uri()),
+        api_key_enc: None,
+        api_key_env: Some("PROBE_IT_KEY3".into()),
+        model: "gpt".into(),
+        anthropic_version: None,
+        extra: None,
+    })
+    .await
+    .unwrap();
+
+    let app = app_with_db(&db).await;
+    let result = probe_one_model(app, "m").await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["max_tokens"], 393216);
+
+    // Persistence: default_max_tokens round-trips into extra.
+    let row = db.model_get("m").await.unwrap().unwrap();
+    let extra: serde_json::Value = serde_json::from_str(row.extra.as_deref().unwrap()).unwrap();
+    assert_eq!(extra["default_max_tokens"], 393216);
+}

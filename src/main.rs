@@ -19,8 +19,38 @@ struct Cli {
     #[arg(long, default_value = "./localfusion.db")]
     db: String,
     /// Print all debug-level log output to stdout, overriding the DB log_level setting.
+    /// WARNING: DEBUG logs full upstream request/response bodies (prompts and completions)
+    /// in plaintext. Use only for local troubleshooting, not against a shared log sink.
     #[arg(long, default_value_t = false)]
     debug: bool,
+    /// Allow binding the inference/admin servers to a non-loopback address.
+    /// Without this flag, a configured non-loopback bind is refused: traffic is plaintext
+    /// HTTP (admin token, ingress keys, and prompts would cross the network in the clear).
+    /// When set, put a TLS-terminating reverse proxy in front.
+    #[arg(long, default_value_t = false)]
+    allow_remote: bool,
+}
+
+/// Whether a `host:port` bind string targets a loopback interface.
+///
+/// Resolves the bind via the standard library so both `127.0.0.1:8787` and `localhost:8787`
+/// (and `[::1]:8787`) are recognized. A bind that fails to resolve is treated as non-loopback
+/// (fail-closed), so an unparseable or externally-resolving host requires --allow-remote.
+fn is_loopback_bind(bind: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    match bind.to_socket_addrs() {
+        Ok(addrs) => {
+            let mut any = false;
+            for a in addrs {
+                any = true;
+                if !a.ip().is_loopback() {
+                    return false;
+                }
+            }
+            any // all resolved addrs are loopback (and there was at least one)
+        }
+        Err(_) => false,
+    }
 }
 
 async fn chat(State(s): State<InferenceState>, h: HeaderMap, Json(b): Json<Value>) -> Response {
@@ -68,6 +98,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let inference_bind = db.setting_get_or("inference_bind", "127.0.0.1:8787").await?;
     let admin_bind = db.setting_get_or("admin_bind", "127.0.0.1:8788").await?;
+
+    // Refuse non-loopback binds unless explicitly opted in: traffic is plaintext HTTP, so
+    // remote exposure would put the admin token, ingress keys, and prompts on the wire.
+    if !cli.allow_remote {
+        for (label, bind) in [("inference", &inference_bind), ("admin", &admin_bind)] {
+            if !is_loopback_bind(bind) {
+                return Err(format!(
+                    "{label} bind '{bind}' is not loopback; refusing to start. \
+                     Traffic is plaintext HTTP — pass --allow-remote (behind a TLS proxy) to override."
+                )
+                .into());
+            }
+        }
+    }
 
     // Probe background task (exits when shutdown signal received)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -127,4 +171,23 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     tracing::info!("shutdown signal received, starting graceful shutdown");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_bind;
+
+    #[test]
+    fn loopback_binds_are_accepted() {
+        assert!(is_loopback_bind("127.0.0.1:8787"));
+        assert!(is_loopback_bind("[::1]:8788"));
+    }
+
+    #[test]
+    fn non_loopback_and_wildcard_binds_are_rejected() {
+        assert!(!is_loopback_bind("0.0.0.0:8787"));
+        assert!(!is_loopback_bind("[::]:8787"));
+        // Unparseable bind fails closed.
+        assert!(!is_loopback_bind("not a bind"));
+    }
 }

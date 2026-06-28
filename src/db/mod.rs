@@ -33,6 +33,11 @@ impl Db {
             .await
             .map_err(|e| FusionError::Internal(format!("db connect: {e}")))?;
         sqlx::query(schema::SCHEMA_SQL).execute(&pool).await?;
+        // Restrict the DB file to owner-only (0600): it holds encrypted upstream keys and
+        // hashed admin/ingress tokens. At-rest encryption is bound to the host machine-id
+        // (see crypto::derive_key), so a co-located reader who can open this file could
+        // re-derive the key — tight file permissions are the first line of defense.
+        restrict_db_permissions(path);
         Ok(Db { pool })
     }
 
@@ -50,6 +55,26 @@ impl Db {
         Ok(Db { pool })
     }
 }
+
+/// Best-effort: tighten the SQLite file to owner read/write only (0600) on Unix.
+/// No-op on other platforms. A failure here is logged but not fatal — the DB still works,
+/// it just isn't permission-hardened (e.g. on a filesystem that doesn't support chmod).
+#[cfg(unix)]
+fn restrict_db_permissions(path: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        if perms.mode() & 0o077 != 0 {
+            perms.set_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(path, perms) {
+                tracing::warn!("could not restrict DB file permissions on {path}: {e}");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_db_permissions(_path: &str) {}
 
 /// Executed after each new connection is established, ensuring foreign key constraints, WAL mode, and busy timeout are active.
 async fn apply_pragmas(conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Error> {
