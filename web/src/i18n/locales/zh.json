@@ -1,0 +1,29 @@
+{
+  "common": {
+    "save": "保存",
+    "saving": "保存中…",
+    "cancel": "取消",
+    "confirm": "确认",
+    "delete": "删除",
+    "deleting": "删除中…",
+    "edit": "编辑",
+    "create": "新建",
+    "saveFailed": "保存失败",
+    "deleteFailed": "删除失败",
+    "updateFailed": "更新失败",
+    "deleted": "已删除",
+    "actions": "操作",
+    "unknown": "未知"
+  },
+  "nav": {
+    "groupConfig": "配置",
+    "groupOps": "运维",
+    "models": "真实模型",
+    "virtualModels": "虚拟模型",
+    "keys": "密钥 / ACL",
+    "dashboard": "监控",
+    "dashboardPage": "监控面板",
+    "playground": "调试台",
+    "settings": "设置"
+  }
+}

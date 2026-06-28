@@ -1,0 +1,29 @@
+{
+  "common": {
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "deleting": "Deleting…",
+    "edit": "Edit",
+    "create": "Create",
+    "saveFailed": "Save failed",
+    "deleteFailed": "Delete failed",
+    "updateFailed": "Update failed",
+    "deleted": "Deleted",
+    "actions": "Actions",
+    "unknown": "Unknown"
+  },
+  "nav": {
+    "groupConfig": "Config",
+    "groupOps": "Operations",
+    "models": "Real Models",
+    "virtualModels": "Virtual Models",
+    "keys": "Keys / ACL",
+    "dashboard": "Monitoring",
+    "dashboardPage": "Monitoring Dashboard",
+    "playground": "Playground",
+    "settings": "Settings"
+  }
+}
