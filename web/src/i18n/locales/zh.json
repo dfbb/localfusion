@@ -169,6 +169,24 @@
     "estCost": "预估成本 ${{value}}",
     "turnsTimeline": "对话轮次（{{count}}）"
   },
+  "settings": {
+    "pageSubtitle": "日志和服务器配置。",
+    "systemSettings": "系统设置",
+    "loggingTitle": "日志配置",
+    "loggingDescription": "配置日志级别和输出目标。修改文件/控制台选项需重启服务生效。",
+    "logLevel": "日志级别",
+    "logFilePath": "日志文件路径",
+    "logFilePlaceholder": "留空表示不写文件（如 /var/log/localfusion.log）",
+    "logToStdout": "输出到控制台（stdout）",
+    "savedWithRestart": "已保存（文件/控制台改动需重启）"
+  },
+  "auth": {
+    "title": "LocalFusion 管理登录",
+    "tokenPlaceholder": "admin token",
+    "verifying": "验证中…",
+    "signIn": "登录",
+    "invalidToken": "token 无效"
+  },
   "dashboard": {
     "subtitle": "查看用量、性能与价格数据。",
     "tabUsage": "用量趋势",

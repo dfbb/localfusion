@@ -169,6 +169,24 @@
     "estCost": "Est. cost ${{value}}",
     "turnsTimeline": "Conversation turns ({{count}})"
   },
+  "settings": {
+    "pageSubtitle": "Logging and server configuration.",
+    "systemSettings": "System Settings",
+    "loggingTitle": "Logging Config",
+    "loggingDescription": "Configure log level and output targets. Changes to file/console require a service restart.",
+    "logLevel": "Log Level",
+    "logFilePath": "Log File Path",
+    "logFilePlaceholder": "Leave blank to disable file logging (e.g. /var/log/localfusion.log)",
+    "logToStdout": "Output to console (stdout)",
+    "savedWithRestart": "Saved (file/console changes require restart)"
+  },
+  "auth": {
+    "title": "LocalFusion Admin Login",
+    "tokenPlaceholder": "admin token",
+    "verifying": "Verifying…",
+    "signIn": "Sign In",
+    "invalidToken": "Invalid token"
+  },
   "dashboard": {
     "subtitle": "View usage, performance, and pricing data.",
     "tabUsage": "Usage Trend",

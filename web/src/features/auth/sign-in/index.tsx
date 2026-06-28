@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import axios from 'axios'
 import { useAuth } from '@/stores/auth-store'
@@ -7,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 
 export function SignIn() {
+  const { t } = useTranslation()
   const [token, setToken] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -24,7 +26,7 @@ export function SignIn() {
       setAuth(token)
       nav({ to: '/' })
     } catch {
-      setError('token 无效')
+      setError(t('auth.invalidToken'))
     } finally {
       setLoading(false)
     }
@@ -34,17 +36,17 @@ export function SignIn() {
     <div className="flex min-h-svh items-center justify-center bg-muted/50">
       <Card className="w-80 p-6">
         <form onSubmit={submit} className="space-y-4">
-          <h1 className="text-xl font-bold">LocalFusion 管理登录</h1>
+          <h1 className="text-xl font-bold">{t('auth.title')}</h1>
           <Input
             type="password"
-            placeholder="admin token"
+            placeholder={t('auth.tokenPlaceholder')}
             value={token}
             onChange={(e) => setToken(e.target.value)}
             autoFocus
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? '验证中…' : '登录'}
+            {loading ? t('auth.verifying') : t('auth.signIn')}
           </Button>
         </form>
       </Card>
