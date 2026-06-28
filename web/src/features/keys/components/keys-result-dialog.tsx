@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,13 +18,14 @@ type Props = {
 }
 
 export function KeysResultDialog({ open, result, onClose }: Props) {
+  const { t } = useTranslation()
   return (
     <AlertDialog open={open}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>密钥已创建</AlertDialogTitle>
+          <AlertDialogTitle>{t('keys.resultTitle')}</AlertDialogTitle>
           <AlertDialogDescription>
-            请立即复制并保存，关闭后无法再次查看。
+            {t('keys.resultDesc')}
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -31,7 +33,7 @@ export function KeysResultDialog({ open, result, onClose }: Props) {
           <p className="font-mono break-all rounded bg-muted px-3 py-2 text-sm">
             {result.key}
           </p>
-          <p className="text-red-500 text-sm font-medium">⚠ 关闭后无法再次查看</p>
+          <p className="text-red-500 text-sm font-medium">{t('keys.resultWarning')}</p>
           <Button
             variant="outline"
             size="sm"
@@ -40,12 +42,12 @@ export function KeysResultDialog({ open, result, onClose }: Props) {
               navigator.clipboard.writeText(result.key)
             }}
           >
-            复制到剪贴板
+            {t('keys.copyToClipboard')}
           </Button>
         </div>
 
         <AlertDialogFooter>
-          <AlertDialogAction onClick={onClose}>我已保存</AlertDialogAction>
+          <AlertDialogAction onClick={onClose}>{t('keys.resultConfirm')}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

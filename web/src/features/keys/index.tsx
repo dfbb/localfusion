@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
 import { KeysAclDialog } from './components/keys-acl-dialog'
@@ -54,17 +55,18 @@ function KeysDialogs() {
 }
 
 export function Keys() {
+  const { t } = useTranslation()
   return (
     <KeysProvider>
       <Header fixed>
-        <h1 className="text-base font-medium">密钥 / ACL</h1>
+        <h1 className="text-base font-medium">{t('nav.keys')}</h1>
       </Header>
 
       <Main className="flex flex-1 flex-col gap-4 sm:gap-6">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">接入密钥</h2>
-            <p className="text-muted-foreground">管理客户端接入密钥及访问控制列表。</p>
+            <h2 className="text-2xl font-bold tracking-tight">{t('keys.pageTitle')}</h2>
+            <p className="text-muted-foreground">{t('keys.pageSubtitle')}</p>
           </div>
           <KeysPrimaryButtons />
         </div>

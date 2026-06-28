@@ -2,6 +2,7 @@ import { type ColumnDef } from '@tanstack/react-table'
 import { format } from 'date-fns'
 import { MoreHorizontal, Pencil, Shield, Trash2 } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -19,11 +20,12 @@ import { useKeys } from './keys-provider'
 
 function EnabledSwitch({ row }: { row: { original: KeyRow } }) {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   const toggle = useMutation({
     mutationFn: (enabled: boolean) =>
       api.patch(`/keys/${row.original.id}`, { enabled }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['keys'] }),
-    onError: () => toast.error('更新失败'),
+    onError: () => toast.error(t('common.updateFailed')),
   })
 
   return (
@@ -37,12 +39,13 @@ function EnabledSwitch({ row }: { row: { original: KeyRow } }) {
 
 function RowActions({ row }: { row: { original: KeyRow } }) {
   const { setOpen, setCurrentRow } = useKeys()
+  const { t } = useTranslation()
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="h-8 w-8 p-0">
           <MoreHorizontal className="h-4 w-4" />
-          <span className="sr-only">操作</span>
+          <span className="sr-only">{t('common.actions')}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-40">
@@ -53,7 +56,7 @@ function RowActions({ row }: { row: { original: KeyRow } }) {
           }}
         >
           <Shield className="mr-2 h-4 w-4" />
-          编辑 ACL
+          {t('keys.editAcl')}
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => {
@@ -62,7 +65,7 @@ function RowActions({ row }: { row: { original: KeyRow } }) {
           }}
         >
           <Pencil className="mr-2 h-4 w-4" />
-          改标签
+          {t('keys.editLabel')}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -73,7 +76,7 @@ function RowActions({ row }: { row: { original: KeyRow } }) {
           }}
         >
           <Trash2 className="mr-2 h-4 w-4" />
-          删除
+          {t('common.delete')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -83,19 +86,19 @@ function RowActions({ row }: { row: { original: KeyRow } }) {
 export const keysColumns: ColumnDef<KeyRow>[] = [
   {
     accessorKey: 'label',
-    header: '标签',
+    header: () => { const { t } = useTranslation(); return t('keys.label') },
     cell: ({ row }) => (
       <span className="font-medium">{row.getValue('label')}</span>
     ),
   },
   {
     accessorKey: 'enabled',
-    header: '状态',
+    header: () => { const { t } = useTranslation(); return t('common.status') },
     cell: ({ row }) => <EnabledSwitch row={row} />,
   },
   {
     accessorKey: 'created_at',
-    header: '创建时间',
+    header: () => { const { t } = useTranslation(); return t('common.createdAt') },
     cell: ({ row }) => {
       const ts = row.getValue<number>('created_at')
       return (
@@ -109,11 +112,12 @@ export const keysColumns: ColumnDef<KeyRow>[] = [
     accessorKey: 'acl_all',
     header: 'ACL',
     cell: ({ row }) => {
+      const { t } = useTranslation()
       const aclAll = row.getValue<boolean>('acl_all')
       return aclAll ? (
-        <Badge variant="outline" className="text-green-700 border-green-300">全部</Badge>
+        <Badge variant="outline" className="text-green-700 border-green-300">{t('keys.aclAll')}</Badge>
       ) : (
-        <Badge variant="outline" className="text-amber-700 border-amber-300">白名单</Badge>
+        <Badge variant="outline" className="text-amber-700 border-amber-300">{t('keys.aclWhitelist')}</Badge>
       )
     },
   },

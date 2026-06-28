@@ -1,4 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
+import { Trans } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -20,25 +22,29 @@ type Props = {
 
 export function KeysDeleteDialog({ open, onOpenChange, currentRow }: Props) {
   const qc = useQueryClient()
+  const { t } = useTranslation()
 
   const del = useMutation({
     mutationFn: () => api.delete(`/keys/${currentRow.id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['keys'] })
-      toast.success('已删除')
+      toast.success(t('common.deleted'))
       onOpenChange(false)
     },
-    onError: () => toast.error('删除失败'),
+    onError: () => toast.error(t('common.deleteFailed')),
   })
 
   return (
     <Dialog open={open} onOpenChange={(s) => { if (!del.isPending) onOpenChange(s) }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-destructive">删除密钥</DialogTitle>
+          <DialogTitle className="text-destructive">{t('keys.deleteTitle')}</DialogTitle>
           <DialogDescription>
-            确定要删除密钥 <span className="font-semibold">{currentRow.label}</span> 吗？
-            此操作不可撤销，使用该密钥的客户端将立即失效。
+            <Trans
+              i18nKey="keys.deleteConfirmBody"
+              values={{ label: currentRow.label, irreversible: t('common.irreversible') }}
+              components={{ label: <span className="font-semibold" /> }}
+            />
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -47,14 +53,14 @@ export function KeysDeleteDialog({ open, onOpenChange, currentRow }: Props) {
             onClick={() => onOpenChange(false)}
             disabled={del.isPending}
           >
-            取消
+            {t('common.cancel')}
           </Button>
           <Button
             variant="destructive"
             onClick={() => del.mutate()}
             disabled={del.isPending}
           >
-            {del.isPending ? '删除中…' : '确认删除'}
+            {del.isPending ? t('common.deleting') : t('keys.confirmDelete')}
           </Button>
         </DialogFooter>
       </DialogContent>
