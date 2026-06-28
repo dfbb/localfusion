@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next'
 
 export function makeVirtualModelSchema(t: TFunction) {
   return z.object({
-    name: z.string().min(1, t('virtualModels.nameRequired')),
+    name: z.string().min(1, t('virtualModels.nameRequiredSchema')),
     strategy: z.string().min(1, t('virtualModels.strategyRequired')),
     members: z.array(z.string()).min(1, t('virtualModels.membersRequired')),
     params: z.record(z.string(), z.unknown()).optional(),

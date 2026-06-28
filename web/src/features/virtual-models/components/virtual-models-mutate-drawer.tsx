@@ -92,7 +92,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const filteredMembers = members.filter(Boolean)
-    if (!name) { toast.error(t('virtualModels.nameRequired2')); return }
+    if (!name) { toast.error(t('virtualModels.nameRequired')); return }
     if (!strategy) { toast.error(t('virtualModels.strategyRequired')); return }
     if (filteredMembers.length === 0) { toast.error(t('virtualModels.membersRequired')); return }
     save.mutate({ name, strategy, members: filteredMembers, params })
