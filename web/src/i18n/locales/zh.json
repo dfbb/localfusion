@@ -83,7 +83,6 @@
     "membersCount": "成员数",
     "searchName": "搜索名称...",
     "noVirtualModels": "暂无虚拟模型",
-    "nameRequiredSchema": "名称不能为空",
     "strategyRequired": "请选择策略",
     "membersRequired": "至少需要一个成员",
     "nameRequired": "请填写名称",

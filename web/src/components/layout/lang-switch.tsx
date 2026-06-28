@@ -21,7 +21,7 @@ export function LangSwitch() {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-1.5">
+        <Button variant="ghost" size="sm" className="gap-1.5" aria-label="Switch language">
           <Languages className="h-4 w-4" />
           <span className="text-xs">{short}</span>
         </Button>
