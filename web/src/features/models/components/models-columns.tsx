@@ -1,5 +1,6 @@
 import { type ColumnDef } from '@tanstack/react-table'
 import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -77,13 +78,14 @@ const connectorColors: Record<string, string> = {
 }
 
 function RowActions({ row }: { row: { original: ModelRow } }) {
+  const { t } = useTranslation()
   const { setOpen, setCurrentRow } = useModels()
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="h-8 w-8 p-0">
           <MoreHorizontal className="h-4 w-4" />
-          <span className="sr-only">操作</span>
+          <span className="sr-only">{t('common.actions')}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-36">
@@ -94,7 +96,7 @@ function RowActions({ row }: { row: { original: ModelRow } }) {
           }}
         >
           <Pencil className="mr-2 h-4 w-4" />
-          编辑
+          {t('common.edit')}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -105,7 +107,7 @@ function RowActions({ row }: { row: { original: ModelRow } }) {
           }}
         >
           <Trash2 className="mr-2 h-4 w-4" />
-          删除
+          {t('common.delete')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -123,7 +125,7 @@ export const modelsColumns: ColumnDef<ModelRow>[] = [
   },
   {
     accessorKey: 'connector',
-    header: '连接器',
+    header: () => { const { t } = useTranslation(); return t('models.connector') },
     cell: ({ row }) => {
       const connector = row.getValue<string>('connector')
       return (
@@ -136,7 +138,7 @@ export const modelsColumns: ColumnDef<ModelRow>[] = [
   },
   {
     accessorKey: 'model',
-    header: '模型',
+    header: () => { const { t } = useTranslation(); return t('models.modelName') },
     cell: ({ row }) => (
       <span className="font-mono text-sm">{row.getValue('model')}</span>
     ),
@@ -152,16 +154,17 @@ export const modelsColumns: ColumnDef<ModelRow>[] = [
   },
   {
     id: 'key_status',
-    header: '密钥',
+    header: () => { const { t } = useTranslation(); return t('models.apiKey') },
     cell: ({ row }) => {
+      const { t } = useTranslation()
       const { api_key_enc, api_key_env } = row.original
       if (api_key_enc) {
-        return <span className="text-sm text-green-600 dark:text-green-400">已加密存储</span>
+        return <span className="text-sm text-green-600 dark:text-green-400">{t('models.keyEncrypted')}</span>
       }
       if (api_key_env) {
         return <span className="text-sm text-blue-600 dark:text-blue-400">env: {api_key_env}</span>
       }
-      return <span className="text-sm text-muted-foreground">未配置</span>
+      return <span className="text-sm text-muted-foreground">{t('models.keyNotSet')}</span>
     },
   },
   {

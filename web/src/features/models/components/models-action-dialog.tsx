@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 import { useModels } from './models-provider'
 import { Label as LabelPrimitive, RadioGroup as RadioGroupPrimitive } from 'radix-ui'
 import { api } from '@/lib/api'
@@ -83,6 +84,7 @@ function withMaxInputTokens(extra: string | undefined, maxInputTokens: number): 
 
 export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   const isEdit = !!currentRow
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const { runTestOne } = useModels()
   const [keyMode, setKeyMode] = useState<'direct' | 'env'>('direct')
@@ -118,7 +120,8 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           extra: currentRow.extra ?? '',
         })
         setMaxInputTokens(parseMaxInputTokens(currentRow.extra))
-        // 直填密钥的模型(api_key_enc 有值)即便 reset 清空 api_key 也应保持「直填」模式
+        // Models with a directly-entered key (api_key_enc set) should stay in 'direct' mode
+        // even after reset clears the api_key field.
         setKeyMode(currentRow.api_key_enc ? 'direct' : currentRow.api_key_env ? 'env' : 'direct')
       } else {
         reset(defaultValues)
@@ -133,14 +136,14 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
       isEdit ? api.put(`/models/${v.id}`, v) : api.post('/models', v),
     onSuccess: (_data, v) => {
       qc.invalidateQueries({ queryKey: ['models'] })
-      toast.success('已保存')
+      toast.success(t('common.saved'))
       onOpenChange(false)
       if (isEdit) {
         // Fire-and-forget: probe the saved model to auto-correct base_url/connector if needed
         runTestOne(v.id)
       }
     },
-    onError: () => toast.error('保存失败'),
+    onError: () => toast.error(t('common.saveFailed')),
   })
 
   const connector = watch('connector')
@@ -160,10 +163,9 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
     <Dialog open={open} onOpenChange={(s) => { if (!m.isPending) { reset(); onOpenChange(s) } }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{isEdit ? '编辑模型' : '新建模型'}</DialogTitle>
+          <DialogTitle>{isEdit ? t('models.editModel') : t('models.createModel')}</DialogTitle>
           <DialogDescription>
-            {isEdit ? '修改模型配置。' : '填写新模型信息。'}
-            完成后点击保存。
+            {isEdit ? t('models.editDescription') : t('models.createDescription')}
           </DialogDescription>
         </DialogHeader>
 
@@ -188,7 +190,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           {/* Connector */}
           <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
             <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
-              连接器
+              {t('models.connector')}
             </LabelPrimitive.Root>
             <div className="col-span-4">
               <Select
@@ -229,7 +231,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           {/* Model */}
           <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
             <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="model-name">
-              模型名
+              {t('models.modelName')}
             </LabelPrimitive.Root>
             <Input
               id="model-name"
@@ -260,7 +262,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
           {/* API Key section */}
           <div className="grid grid-cols-6 gap-x-4 gap-y-1">
             <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium pt-2">
-              密钥
+              {t('models.apiKey')}
             </LabelPrimitive.Root>
             <div className="col-span-4 space-y-2">
               <RadioGroupPrimitive.Root
@@ -283,7 +285,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
                     </RadioGroupPrimitive.Indicator>
                   </RadioGroupPrimitive.Item>
                   <LabelPrimitive.Root htmlFor="key-direct" className="text-sm cursor-pointer">
-                    直填
+                    {t('models.keyDirect')}
                   </LabelPrimitive.Root>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -297,7 +299,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
                     </RadioGroupPrimitive.Indicator>
                   </RadioGroupPrimitive.Item>
                   <LabelPrimitive.Root htmlFor="key-env" className="text-sm cursor-pointer">
-                    环境变量
+                    {t('models.keyEnv')}
                   </LabelPrimitive.Root>
                 </div>
               </RadioGroupPrimitive.Root>
@@ -305,7 +307,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
               {keyMode === 'direct' ? (
                 <Input
                   type="password"
-                  placeholder={isEdit && currentRow?.api_key_enc ? '已设置（留空不变）' : 'sk-...'}
+                  placeholder={isEdit && currentRow?.api_key_enc ? t('models.keySetPlaceholder') : 'sk-...'}
                   autoComplete="new-password"
                   {...register('api_key')}
                 />
@@ -333,7 +335,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
               placeholder="1000000"
             />
             <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
-              上下文窗口（输入上限），默认 1,000,000，仅作记录参考，不强制校验
+              {t('models.maxInputTokensHint')}
             </p>
           </div>
 
@@ -346,13 +348,13 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
               <Input
                 id="model-max-tokens"
                 className="col-span-4"
-                value={maxTokens != null ? maxTokens.toLocaleString() : '未检测'}
+                value={maxTokens != null ? maxTokens.toLocaleString() : t('models.notDetected')}
                 readOnly
                 disabled
-                placeholder="未检测"
+                placeholder={t('models.notDetected')}
               />
               <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
-                输出上限，由连接测试自动检测，不可编辑
+                {t('models.maxOutputTokensHint')}
               </p>
             </div>
           )}
@@ -367,7 +369,7 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
             form="model-form"
             disabled={m.isPending}
           >
-            {m.isPending ? '保存中…' : '保存'}
+            {t(m.isPending ? 'common.saving' : 'common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

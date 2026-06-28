@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Trans, useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -19,13 +20,14 @@ type Props = {
 }
 
 export function ModelsDeleteDialog({ open, onOpenChange, currentRow }: Props) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
 
   const del = useMutation({
     mutationFn: (id: string) => api.delete(`/models/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['models'] })
-      toast.success('已删除')
+      toast.success(t('common.deleted'))
       onOpenChange(false)
     },
     onError: (e: any) => {
@@ -34,9 +36,9 @@ export function ModelsDeleteDialog({ open, onOpenChange, currentRow }: Props) {
         const names = refs
           .map((r: any) => `${r.virtual_name}(${r.ref_kind})`)
           .join(', ')
-        toast.error(`被引用，无法删除：${names || '未知引用'}`)
+        toast.error(t('models.referencedCannotDelete', { names: names || t('models.unknownRef') }))
       } else {
-        toast.error('删除失败')
+        toast.error(t('common.deleteFailed'))
       }
     },
   })
@@ -45,10 +47,13 @@ export function ModelsDeleteDialog({ open, onOpenChange, currentRow }: Props) {
     <Dialog open={open} onOpenChange={(s) => { if (!del.isPending) onOpenChange(s) }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-destructive">删除模型</DialogTitle>
+          <DialogTitle className="text-destructive">{t('models.deleteModel')}</DialogTitle>
           <DialogDescription>
-            确定要删除模型 <span className="font-mono font-semibold">{currentRow.id}</span> 吗？
-            此操作不可撤销。
+            <Trans
+              i18nKey="models.deleteConfirmBody"
+              values={{ id: currentRow.id, irreversible: t('common.irreversible') }}
+              components={{ id: <span className="font-mono font-semibold" /> }}
+            />
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -57,14 +62,14 @@ export function ModelsDeleteDialog({ open, onOpenChange, currentRow }: Props) {
             onClick={() => onOpenChange(false)}
             disabled={del.isPending}
           >
-            取消
+            {t('common.cancel')}
           </Button>
           <Button
             variant="destructive"
             onClick={() => del.mutate(currentRow.id)}
             disabled={del.isPending}
           >
-            {del.isPending ? '删除中…' : '确认删除'}
+            {t(del.isPending ? 'common.deleting' : 'models.confirmDelete')}
           </Button>
         </DialogFooter>
       </DialogContent>
