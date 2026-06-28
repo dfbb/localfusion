@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { type ColumnDef } from '@tanstack/react-table'
 import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -22,13 +23,14 @@ const strategyColors: Record<string, string> = {
 }
 
 function RowActions({ row }: { row: { original: VirtualModelRow } }) {
+  const { t } = useTranslation()
   const { setOpen, setCurrentRow } = useVirtualModels()
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="h-8 w-8 p-0">
           <MoreHorizontal className="h-4 w-4" />
-          <span className="sr-only">操作</span>
+          <span className="sr-only">{t('common.actions')}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-36">
@@ -39,7 +41,7 @@ function RowActions({ row }: { row: { original: VirtualModelRow } }) {
           }}
         >
           <Pencil className="mr-2 h-4 w-4" />
-          编辑
+          {t('common.edit')}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -50,7 +52,7 @@ function RowActions({ row }: { row: { original: VirtualModelRow } }) {
           }}
         >
           <Trash2 className="mr-2 h-4 w-4" />
-          删除
+          {t('common.delete')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -60,7 +62,7 @@ function RowActions({ row }: { row: { original: VirtualModelRow } }) {
 export const virtualModelsColumns: ColumnDef<VirtualModelRow>[] = [
   {
     accessorKey: 'name',
-    header: '名称',
+    header: () => { const { t } = useTranslation(); return t('common.name') },
     cell: ({ row }) => (
       <span className="font-mono text-sm">{row.getValue('name')}</span>
     ),
@@ -68,7 +70,7 @@ export const virtualModelsColumns: ColumnDef<VirtualModelRow>[] = [
   },
   {
     accessorKey: 'strategy',
-    header: '策略',
+    header: () => { const { t } = useTranslation(); return t('virtualModels.strategy') },
     cell: ({ row }) => {
       const strategy = row.getValue<string>('strategy')
       return (
@@ -81,12 +83,15 @@ export const virtualModelsColumns: ColumnDef<VirtualModelRow>[] = [
   },
   {
     id: 'members_count',
-    header: '成员数',
-    cell: ({ row }) => (
-      <span className="text-sm text-muted-foreground">
-        {row.original.members.length} 个
-      </span>
-    ),
+    header: () => { const { t } = useTranslation(); return t('virtualModels.membersCount') },
+    cell: ({ row }) => {
+      const { t } = useTranslation()
+      return (
+        <span className="text-sm text-muted-foreground">
+          {t('virtualModels.memberCount', { count: row.original.members.length })}
+        </span>
+      )
+    },
   },
   {
     id: 'actions',

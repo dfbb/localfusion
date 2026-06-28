@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Label as LabelPrimitive } from 'radix-ui'
@@ -31,14 +32,8 @@ type Props = {
   currentRow?: VirtualModelRow | null
 }
 
-const STRATEGY_HINTS: Record<string, string> = {
-  failover: '顺序=优先级，首个可用模型优先',
-  speed: '顺序=优先级，按延迟自动排序',
-  cheapest: '顺序=优先级，按价格选最低',
-  multimodal: '第一行=主推理模型',
-}
-
 export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Props) {
+  const { t } = useTranslation()
   const isEdit = !!currentRow
   const qc = useQueryClient()
 
@@ -46,6 +41,13 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
   const [strategy, setStrategy] = useState('')
   const [members, setMembers] = useState<string[]>([''])
   const [params, setParams] = useState<Record<string, unknown>>({})
+
+  const strategyHints: Record<string, string> = {
+    failover: t('virtualModels.strategyHintFailover'),
+    speed: t('virtualModels.strategyHintSpeed'),
+    cheapest: t('virtualModels.strategyHintCheapest'),
+    multimodal: t('virtualModels.strategyHintMultimodal'),
+  }
 
   const { data: strategies = [] } = useQuery<StrategyRow[]>({
     queryKey: ['strategies'],
@@ -81,31 +83,30 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
         : api.post('/virtual-models', v),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vmodels'] })
-      toast.success('已保存')
+      toast.success(t('common.saved'))
       onOpenChange(false)
     },
-    onError: (e: any) => toast.error(e.response?.data?.error ?? '保存失败'),
+    onError: (e: any) => toast.error(e.response?.data?.error ?? t('common.saveFailed')),
   })
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const filteredMembers = members.filter(Boolean)
-    if (!name) { toast.error('请填写名称'); return }
-    if (!strategy) { toast.error('请选择策略'); return }
-    if (filteredMembers.length === 0) { toast.error('至少需要一个成员'); return }
+    if (!name) { toast.error(t('virtualModels.nameRequired2')); return }
+    if (!strategy) { toast.error(t('virtualModels.strategyRequired')); return }
+    if (filteredMembers.length === 0) { toast.error(t('virtualModels.membersRequired')); return }
     save.mutate({ name, strategy, members: filteredMembers, params })
   }
 
-  const hint = STRATEGY_HINTS[strategy]
+  const hint = strategyHints[strategy]
 
   return (
     <Sheet open={open} onOpenChange={(s) => { if (!save.isPending) onOpenChange(s) }}>
       <SheetContent className="sm:max-w-lg overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>{isEdit ? '编辑虚拟模型' : '新建虚拟模型'}</SheetTitle>
+          <SheetTitle>{isEdit ? t('virtualModels.editVirtualModel') : t('virtualModels.createVirtualModel')}</SheetTitle>
           <SheetDescription>
-            {isEdit ? '修改虚拟模型配置。' : '配置新的虚拟模型。'}
-            完成后点击保存。
+            {isEdit ? t('virtualModels.editDescription') : t('virtualModels.createDescription')}
           </SheetDescription>
         </SheetHeader>
 
@@ -113,7 +114,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
           {/* Name */}
           <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
             <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium" htmlFor="vm-name">
-              名称
+              {t('common.name')}
             </LabelPrimitive.Root>
             <Input
               id="vm-name"
@@ -128,12 +129,12 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
           {/* Strategy */}
           <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
             <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
-              策略
+              {t('virtualModels.strategy')}
             </LabelPrimitive.Root>
             <div className="col-span-4">
               <Select value={strategy} onValueChange={(v) => { setStrategy(v); if (!isEdit) setParams({}) }}>
                 <SelectTrigger className="w-full h-8">
-                  <SelectValue placeholder="选择策略..." />
+                  <SelectValue placeholder={t('virtualModels.selectStrategy')} />
                 </SelectTrigger>
                 <SelectContent>
                   {strategies.map((s) => (
@@ -151,7 +152,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
 
           {/* Members */}
           <div className="space-y-2">
-            <LabelPrimitive.Root className="text-sm font-medium">成员模型</LabelPrimitive.Root>
+            <LabelPrimitive.Root className="text-sm font-medium">{t('virtualModels.membersLabel')}</LabelPrimitive.Root>
             <MemberList
               value={members}
               onChange={setMembers}
@@ -163,7 +164,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
           {/* Strategy Params */}
           {strategy && (
             <div className="space-y-2">
-              <LabelPrimitive.Root className="text-sm font-medium">策略参数</LabelPrimitive.Root>
+              <LabelPrimitive.Root className="text-sm font-medium">{t('virtualModels.strategyParams')}</LabelPrimitive.Root>
               <StrategyParamsForm
                 strategyName={strategy}
                 strategies={strategies}
@@ -181,7 +182,7 @@ export function VirtualModelsMutateDrawer({ open, onOpenChange, currentRow }: Pr
             form="vmodel-form"
             disabled={save.isPending}
           >
-            {save.isPending ? '保存中…' : '保存'}
+            {save.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </SheetFooter>
       </SheetContent>
