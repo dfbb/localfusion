@@ -16,12 +16,12 @@ export function ModelsPrimaryButtons() {
         {testing ? (
           <>
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Testing…
+            {t('models.testing')}
           </>
         ) : (
           <>
             <Zap className="mr-2 h-4 w-4" />
-            Test All
+            {t('models.testAll')}
           </>
         )}
       </Button>

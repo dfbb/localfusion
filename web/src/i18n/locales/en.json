@@ -58,7 +58,9 @@
     "confirmDelete": "Confirm Delete",
     "deleteConfirmBody": "Delete model <id>{{id}}</id>? {{irreversible}}",
     "referencedCannotDelete": "Referenced, cannot delete: {{names}}",
-    "unknownRef": "Unknown reference"
+    "unknownRef": "Unknown reference",
+    "testAll": "Test All",
+    "testing": "Testing…"
   },
   "nav": {
     "groupConfig": "Config",

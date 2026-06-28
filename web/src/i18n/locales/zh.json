@@ -58,7 +58,9 @@
     "confirmDelete": "确认删除",
     "deleteConfirmBody": "确定要删除模型 <id>{{id}}</id> 吗？{{irreversible}}",
     "referencedCannotDelete": "被引用，无法删除：{{names}}",
-    "unknownRef": "未知引用"
+    "unknownRef": "未知引用",
+    "testAll": "测试全部",
+    "testing": "测试中…"
   },
   "nav": {
     "groupConfig": "配置",
