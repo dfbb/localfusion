@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS prices (
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS price_defaults (
-  model_key TEXT PRIMARY KEY, price_in REAL NOT NULL, price_out REAL NOT NULL,
+  model_key TEXT PRIMARY KEY, price_in REAL NOT NULL DEFAULT 0, price_out REAL NOT NULL DEFAULT 0,
   cache_read REAL NOT NULL DEFAULT 0, cache_write REAL NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
