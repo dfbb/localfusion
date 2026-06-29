@@ -8,6 +8,7 @@ pub mod error;
 pub mod ingress;
 pub mod logging;
 pub mod pipeline;
+pub mod price_refresh;
 pub mod prices_litellm;
 pub mod probe;
 pub mod router;
