@@ -34,11 +34,32 @@ pub async fn refresh_from_url(
         .map_err(|e| FusionError::Internal(format!("price refresh fetch: {e}")))?
         .error_for_status()
         .map_err(|e| FusionError::Internal(format!("price refresh status: {e}")))?;
-    let body = resp
-        .text()
+
+    // Reject obviously oversized responses up front via Content-Length when present.
+    const MAX_BODY: u64 = 16 * 1024 * 1024;
+    if let Some(len) = resp.content_length() {
+        if len > MAX_BODY {
+            return Err(FusionError::Internal(format!(
+                "price refresh body too large: {len} bytes"
+            )));
+        }
+    }
+    let bytes = resp
+        .bytes()
         .await
         .map_err(|e| FusionError::Internal(format!("price refresh body: {e}")))?;
+    if bytes.len() as u64 > MAX_BODY {
+        return Err(FusionError::Internal(format!(
+            "price refresh body too large: {} bytes",
+            bytes.len()
+        )));
+    }
+    let body = String::from_utf8_lossy(&bytes);
     let rows = crate::prices_litellm::parse_litellm(&body)?;
+    if rows.is_empty() {
+        tracing::warn!("price refresh parsed zero priced models; keeping existing snapshot");
+        return Ok(0);
+    }
     let count = rows.len();
     db.defaults_replace_all(&rows, now).await?;
     Ok(count)
@@ -48,7 +69,10 @@ pub async fn refresh_from_url(
 /// A failed refresh logs a warning and keeps the existing snapshot; the next tick retries.
 pub fn spawn_price_refresh_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     tokio::spawn(async move {
-        let http = reqwest::Client::new();
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(DAY_SECS));
         loop {
             tokio::select! {
@@ -115,5 +139,23 @@ mod tests {
         assert!(res.is_err());
         // existing snapshot untouched
         assert!(db.defaults_match("keep").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_snapshot_when_parse_yields_zero() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .mount(&server)
+            .await;
+        let db = Db::open_memory().await.unwrap();
+        db.defaults_replace_all(
+            &[("keep".to_string(), PriceValues { price_in: 1.0, price_out: 1.0, cache_read: 0.0, cache_write: 0.0 })],
+            1,
+        ).await.unwrap();
+        let http = reqwest::Client::new();
+        let n = refresh_from_url(&db, &http, &server.uri(), 100).await.unwrap();
+        assert_eq!(n, 0);
+        assert!(db.defaults_match("keep").await.unwrap().is_some()); // snapshot preserved
     }
 }
