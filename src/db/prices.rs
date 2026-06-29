@@ -85,6 +85,13 @@ impl Db {
         Ok(())
     }
 
+    /// Number of rows in the price_defaults snapshot.
+    pub async fn price_defaults_count(&self) -> Result<i64, FusionError> {
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM price_defaults")
+            .fetch_one(&self.pool)
+            .await?)
+    }
+
     /// Load all (model_key, PriceValues) from the snapshot (model_key lowercased for matching).
     async fn price_defaults_all(&self) -> Result<Vec<(String, PriceValues)>, FusionError> {
         let rows = sqlx::query_as::<_, (String, f64, f64, f64, f64)>(

@@ -4,6 +4,7 @@
 //! and any entry without `input_cost_per_token`.
 
 use crate::db::prices::PriceValues;
+use crate::db::Db;
 use crate::error::FusionError;
 
 const SCALE: f64 = 1e6; // litellm prices are USD per single token; we store per million.
@@ -49,6 +50,24 @@ pub fn parse_litellm(json: &str) -> Result<Vec<(String, PriceValues)>, FusionErr
     Ok(out)
 }
 
+/// The litellm price snapshot compiled into the binary at build time.
+pub fn embedded_snapshot() -> &'static str {
+    include_str!("../assets/litellm_model_prices.json")
+}
+
+/// Seed the price_defaults snapshot from the embedded JSON if (and only if) the table
+/// is empty. Idempotent: a non-empty table is left untouched (the daily refresh owns
+/// updates thereafter). `now` is the snapshot's updated_at (Unix seconds).
+pub async fn seed_defaults_if_empty(db: &Db, now: i64) -> Result<(), FusionError> {
+    if db.price_defaults_count().await? > 0 {
+        return Ok(());
+    }
+    let rows = parse_litellm(embedded_snapshot())?;
+    db.defaults_replace_all(&rows, now).await?;
+    tracing::info!("seeded price_defaults from embedded litellm snapshot: {} rows", rows.len());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +108,27 @@ mod tests {
     #[test]
     fn rejects_invalid_json() {
         assert!(parse_litellm("{ not json").is_err());
+    }
+
+    use crate::db::Db;
+
+    #[tokio::test]
+    async fn seed_fills_when_empty_and_is_idempotent() {
+        let db = Db::open_memory().await.unwrap();
+        assert_eq!(db.price_defaults_count().await.unwrap(), 0);
+        seed_defaults_if_empty(&db, 100).await.unwrap();
+        let n = db.price_defaults_count().await.unwrap();
+        assert!(n > 100, "embedded snapshot should seed many rows, got {n}");
+        // gpt-4o is matchable after seeding
+        assert!(db.defaults_match("gpt-4o").await.unwrap().is_some());
+        // second call is a no-op (table non-empty): count unchanged
+        seed_defaults_if_empty(&db, 200).await.unwrap();
+        assert_eq!(db.price_defaults_count().await.unwrap(), n);
+    }
+
+    #[test]
+    fn embedded_snapshot_is_parseable() {
+        let rows = parse_litellm(embedded_snapshot()).unwrap();
+        assert!(rows.iter().any(|(k, _)| k == "gpt-4o"));
     }
 }
