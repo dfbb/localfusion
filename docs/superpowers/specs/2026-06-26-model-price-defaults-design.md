@@ -127,8 +127,25 @@ matched against `price_defaults.model_key`. Comparison is case-insensitive
 4. **No hit:** do not write a price row. The four price fields are left empty
    (UI shows empty/0); the user fills them manually.
 
-`defaults_match(model) -> Option<PriceRow>` implements this and is unit-tested
-across all four cases.
+`defaults_match(model: &str) -> Option<PriceValues>` implements this and is
+unit-tested across all four cases. It returns a model-id-free price struct
+(see below), **not** a `PriceRow` — the snapshot only knows litellm
+`model_key`s, not the local model's `id`. The caller is responsible for
+attaching the local `model_id`:
+
+```rust
+// Model-id-free default prices (all USD per million tokens).
+pub struct PriceValues {
+    pub price_in: f64,
+    pub price_out: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+```
+
+`PriceRow` (the per-model row, which carries `model_id`) is constructed by the
+caller from a `PriceValues` plus the local `model_id`, so a default can never be
+written under the wrong key.
 
 ---
 
@@ -142,13 +159,45 @@ alongside the probe loop, sharing the same shutdown channel.
 - Period: **24 hours**, and it **runs once immediately at startup** (satisfying
   "update a latest version after launch"), then every day.
 - One refresh: GET the litellm raw JSON via the existing reqwest client ->
-  parse -> rewrite `price_defaults` in a single transaction (unit conversion
-  `x1e6`, missing fields recorded as 0) -> set `updated_at`.
+  parse (see field mapping below) -> rewrite `price_defaults` in a single
+  transaction -> set `updated_at`.
 - Failure handling: on network or parse failure, log one `warn` and keep the
   existing `price_defaults` (embedded snapshot or last successful version). The
   service is unaffected; the next cycle retries.
 - Fetch URL (raw form, not the blob page):
   `https://raw.githubusercontent.com/BerriAI/litellm/litellm_internal_staging/model_prices_and_context_window.json`
+
+### litellm JSON parsing & field mapping
+
+The file is a flat JSON object: `{ "<model_key>": { ...fields... }, ... }`
+(~2900 entries). Each value's cost fields are **USD per single token**;
+`price_defaults` stores **USD per million tokens**, so every parsed value is
+multiplied by `1e6`. Exact field mapping (field names verified against the live
+file):
+
+| `price_defaults` column | litellm field | Notes |
+|---|---|---|
+| `price_in` | `input_cost_per_token` | required (see skip rule) |
+| `price_out` | `output_cost_per_token` | missing -> 0 |
+| `cache_read` | `cache_read_input_token_cost` | missing -> 0 |
+| `cache_write` | `cache_creation_input_token_cost` | missing -> 0 (OpenAI models omit it) |
+
+Parsing rules:
+
+- **Skip the `sample_spec` key** — it is a schema-documentation pseudo-entry,
+  not a model.
+- **Skip entries without `input_cost_per_token`** — ~472 entries price by
+  second / character / image / request and have no per-token input cost; they
+  cannot map to per-million-token and are not stored. (Log the skipped count at
+  debug level, per the no-silent-caps guidance.)
+- Each cost field is read as a float and `x1e6`. Only the four mapped fields are
+  read; the many tiered/variant fields (`*_above_200k_tokens`, `*_batches`,
+  `*_priority`, `*_flex`, audio/image/video variants, DeepSeek's
+  `input_cost_per_token_cache_hit`) are intentionally **ignored** — the defaults
+  capture standard base pricing only. A future spec may add tier awareness;
+  out of scope here.
+- `cache_read` / `cache_write` absent -> 0 (correct for models without prompt
+  caching). `price_out` absent -> 0.
 
 The refresh body is factored into a testable pure function
 (JSON string -> parsed rows -> table write) so HTTP success/failure-fallback can
@@ -161,13 +210,21 @@ with the probe loop).
 
 ### Usage struct
 
-`ModelUsage` (`src/unified.rs`) gains three fields, defaulting to 0:
+`ModelUsage` (`src/unified.rs`) gains three fields:
 
 ```rust
-pub cache_read_tokens: u64,       // tokens served from cache (cheaper input)
-pub cache_write_tokens: u64,      // tokens written to cache (Anthropic only)
-pub billable_input_tokens: u64,   // non-cached input tokens, for cost only
+pub cache_read_tokens: u64,       // tokens served from cache (cheaper input); defaults to 0
+pub cache_write_tokens: u64,      // tokens written to cache (Anthropic only); defaults to 0
+pub billable_input_tokens: u64,   // non-cached input tokens, for cost only; see below
 ```
+
+`cache_read_tokens` and `cache_write_tokens` default to 0 (a connector that
+reports no cache info leaves them 0). **`billable_input_tokens` does NOT default
+to 0** — every connector and every `ModelUsage` constructor MUST set it
+explicitly: to `input_tokens` when there is no cache breakdown, or to the
+non-cached input amount when there is. Leaving it 0 would zero out the input
+cost of ordinary non-cached requests, so the field has no meaningful default and
+every construction site (connectors, tests, estimation paths) must assign it.
 
 `input_tokens` keeps its existing meaning and is echoed to the client
 **verbatim** from the upstream — no provider's reported token counts change.
@@ -261,11 +318,13 @@ for the per-model "real" row uses the same folded value.
   `upsert_from_body` successfully inserts the model, the price row for that
   `model_id` is resolved with this precedence:
   1. If **any** of the four price fields is present in the request, use the
-     provided values (absent ones default to 0) and write them to `prices`.
-     User-supplied prices take priority — fuzzy match is **not** run.
+     provided values (absent ones default to 0) and upsert a `PriceRow` keyed by
+     the local `model_id` into `prices`. User-supplied prices take priority —
+     fuzzy match is **not** run.
   2. Otherwise (no price fields at all in the request), run
-     `defaults_match(model)`; on a hit, insert the matched four prices; on no
-     hit, create no price row.
+     `defaults_match(model)`; on a hit, build a `PriceRow` from the returned
+     `PriceValues` plus the local `model_id` and upsert it; on no hit, create no
+     price row.
   This makes the shared add/edit dialog's price inputs meaningful on add: a
   hand-filled price is honored and never overwritten by a default.
 - **Edit prices** (NEW `PUT /admin/api/models/:id/prices`): body
@@ -282,9 +341,11 @@ for the per-model "real" row uses the same folded value.
 
 - `PriceRow` gains `cache_read` and `cache_write`; `price_upsert` writes all
   four.
-- New `price_defaults` methods: `defaults_replace_all(rows)` (single-transaction
-  full-table rewrite) and `defaults_match(model) -> Option<PriceRow>` (the
-  4-step fuzzy match above).
+- New `price_defaults` methods: `defaults_replace_all(rows)` where each row is a
+  `(model_key, PriceValues)` pair (single-transaction full-table rewrite of the
+  snapshot) and `defaults_match(model: &str) -> Option<PriceValues>` (the 4-step
+  fuzzy match above, returning model-id-free `PriceValues` so the caller
+  attaches the local `model_id`).
 
 ---
 
@@ -324,8 +385,11 @@ tests + wiremock, consistent with the codebase.
 - **Fuzzy match (`defaults_match`)**: exact; `.`->`-` normalization; substring
   contains; multi-hit shortest-then-lexicographically-greatest; no-hit returns
   None.
-- **Unit conversion**: litellm per-token `x1e6` -> per-million; missing fields
-  recorded as 0.
+- **litellm field mapping & unit conversion**: parse a small fixture object and
+  assert `input_cost_per_token`/`output_cost_per_token`/
+  `cache_read_input_token_cost`/`cache_creation_input_token_cost` map to the
+  four columns `x1e6`; `sample_spec` is skipped; an entry without
+  `input_cost_per_token` is skipped; absent cache/output fields -> 0.
 - **DB**: `price_defaults` full-table rewrite transaction; `prices` four-field
   upsert.
 - **Cost formula**: `cost_for` with `billable_input_tokens` +
