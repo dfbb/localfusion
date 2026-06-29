@@ -60,6 +60,22 @@ impl Db {
             .await?;
         Ok(())
     }
+
+    /// Delete a model and its price row atomically. A mid-way failure rolls back both,
+    /// so no orphan `prices` row survives a model deletion.
+    pub async fn model_delete_cascade(&self, id: &str) -> Result<(), FusionError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM models WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM prices WHERE model_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +121,19 @@ mod tests {
         );
         db.model_delete("gpt-4o").await.unwrap();
         assert!(db.model_get("gpt-4o").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_cascade_removes_price_row() {
+        use crate::db::prices::PriceRow;
+        let db = Db::open_memory().await.unwrap();
+        db.model_upsert(&sample()).await.unwrap();
+        db.price_upsert(&PriceRow {
+            model_id: "gpt-4o".into(), price_in: 1.0, price_out: 2.0,
+            cache_read: 0.0, cache_write: 0.0, updated_at: 1,
+        }).await.unwrap();
+        db.model_delete_cascade("gpt-4o").await.unwrap();
+        assert!(db.model_get("gpt-4o").await.unwrap().is_none());
+        assert!(db.price_get("gpt-4o").await.unwrap().is_none());
     }
 }

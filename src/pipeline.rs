@@ -128,6 +128,8 @@ mod tests {
             model_id: "m".into(),
             price_in: 1.0,
             price_out: 2.0,
+            cache_read: 0.0,
+            cache_write: 0.0,
             updated_at: 0,
         })
         .await
