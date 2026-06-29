@@ -8,11 +8,14 @@ pub fn hour_floor(ts: i64) -> i64 {
     ts - ts.rem_euclid(3600)
 }
 
-/// Calculate the cost of a single call from the price table; returns 0.0 if no price is found
+/// Calculate the cost of a single call from the price table; returns 0.0 if no price is found.
+/// Bills four disjoint token classes: non-cached input, cache-read, cache-write, output.
 pub async fn cost_for(db: &Db, usage: &ModelUsage) -> f64 {
     match db.price_get(&usage.model_id).await {
         Ok(Some(p)) => {
-            p.price_in * usage.input_tokens as f64 / 1e6
+            p.price_in * usage.billable_input_tokens as f64 / 1e6
+                + p.cache_read * usage.cache_read_tokens as f64 / 1e6
+                + p.cache_write * usage.cache_write_tokens as f64 / 1e6
                 + p.price_out * usage.output_tokens as f64 / 1e6
         }
         _ => 0.0,
@@ -37,11 +40,15 @@ pub async fn write_stats(
     // Write real dimension keyed by actual model
     for c in all_calls {
         let cost = cost_for(db, c).await;
-        agg_in += c.input_tokens;
+        // Uniform true input = non-cached input + cache-read + cache-write (disjoint classes).
+        // Folds cache tokens into the input dimension so they aren't lost from stats, and is
+        // provider-uniform (Anthropic input excludes cache; OpenAI includes it — both reconcile here).
+        let stat_in = c.billable_input_tokens + c.cache_read_tokens + c.cache_write_tokens;
+        agg_in += stat_in;
         agg_out += c.output_tokens;
         agg_cost += cost;
         let d = UsageDelta {
-            input_tokens: c.input_tokens,
+            input_tokens: stat_in,
             output_tokens: c.output_tokens,
             cost,
             errors: (c.status == CallStatus::Failed) as u64,
@@ -118,10 +125,43 @@ mod tests {
         }
     }
 
+    fn mu_cache(model: &str, billable: u64, out: u64, cr: u64, cw: u64) -> ModelUsage {
+        ModelUsage {
+            model_id: model.into(),
+            role: CallRole::Member,
+            input_tokens: billable + cr + cw,
+            output_tokens: out,
+            billable_input_tokens: billable,
+            cache_read_tokens: cr,
+            cache_write_tokens: cw,
+            cost: 0.0,
+            status: CallStatus::Ok,
+            estimated: false,
+            latency_secs: 0.0,
+        }
+    }
+
     #[test]
     fn hour_floor_aligns() {
         assert_eq!(hour_floor(3661), 3600);
         assert_eq!(hour_floor(7200), 7200);
+    }
+
+    #[tokio::test]
+    async fn cost_includes_cache_terms() {
+        use crate::db::prices::PriceRow;
+        let db = Db::open_memory().await.unwrap();
+        db.price_upsert(&PriceRow {
+            model_id: "m".into(), price_in: 2.0, price_out: 4.0,
+            cache_read: 1.0, cache_write: 8.0, updated_at: 1,
+        }).await.unwrap();
+        // billable=1e6, out=1e6, cache_read=1e6, cache_write=1e6
+        let c = cost_for(&db, &mu_cache("m", 1_000_000, 1_000_000, 1_000_000, 1_000_000)).await;
+        // 2 + 4 + 1 + 8 = 15.0
+        assert!((c - 15.0).abs() < 1e-9, "got {c}");
+        // no-cache case still equals input*price_in + out*price_out
+        let c2 = cost_for(&db, &mu_cache("m", 1_000_000, 0, 0, 0)).await;
+        assert!((c2 - 2.0).abs() < 1e-9, "got {c2}");
     }
 
     #[tokio::test]
@@ -164,4 +204,21 @@ mod tests {
         assert_eq!(total[0].requests, 1);
         assert_eq!(total[0].hour_ts, 3600);
     }
+
+    #[tokio::test]
+    async fn write_stats_folds_cache_into_input_dimension() {
+        let db = Db::open_memory().await.unwrap();
+        // Anthropic-style: input_tokens excludes cache; billable=50, cache_read=10, cache_write=20 => true input 80
+        let calls = vec![mu_cache("m", 50, 5, 10, 20)];
+        write_stats(&db, "vf", "synthesize", &calls, false, 3661).await.unwrap();
+        // request_log.total_tokens should be true_input(80) + output(5) = 85
+        let tot: i64 = sqlx::query_scalar("SELECT total_tokens FROM request_log LIMIT 1")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(tot, 85);
+        // usage_hourly 'total' scope input_tokens should be 80
+        let inp: i64 = sqlx::query_scalar("SELECT input_tokens FROM usage_hourly WHERE scope='total'")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(inp, 80);
+    }
 }
+
