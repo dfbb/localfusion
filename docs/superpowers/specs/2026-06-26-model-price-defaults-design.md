@@ -225,14 +225,49 @@ cost = price_in     * billable_input_tokens / 1e6
 distinct set of tokens. Client-echoed `input_tokens` / `total_tokens` are
 untouched and remain faithful to the upstream.
 
+### Usage statistics
+
+`src/pipeline.rs::write_stats` currently aggregates `input_tokens` and
+`output_tokens` into the three usage dimensions (`usage_hourly` rows for real /
+virtual / total) and into `request_log.total_tokens` (as `agg_in + agg_out`).
+If left unchanged, Anthropic's cache tokens would silently vanish from the
+totals (its `input_tokens` excludes them) while OpenAI's would not — an
+inconsistency, and a loss of billed volume from the stats.
+
+Resolution (no usage-schema change): the input dimension records the
+**uniform true input total**
+
+```
+stat_input = billable_input_tokens + cache_read_tokens + cache_write_tokens
+```
+
+For OpenAI/responses this equals the echoed `input_tokens` (70 + 30 + 0 = 100);
+for Anthropic it equals `input_tokens + cache_read + cache_write` (its
+`input_tokens` is already non-cached). So `write_stats` changes `agg_in +=
+c.input_tokens` to `agg_in += c.billable_input_tokens + c.cache_read_tokens +
+c.cache_write_tokens`. `usage_hourly` / `request_log` schemas are unchanged;
+cache tokens are folded into the input dimension rather than stored separately
+(YAGNI — no per-class cache breakdown in the dashboard). `request_log.total_tokens`
+remains `agg_in + agg_out` and is now complete. The `UsageDelta.input_tokens`
+for the per-model "real" row uses the same folded value.
+
 ---
 
 ## Backend API
 
-- **Add model** (`POST /admin/api/models`): after `upsert_from_body`
-  successfully inserts the model, if `prices` has no row for that `model_id`,
-  run `defaults_match(model)`; on a hit, insert the four prices into `prices`
-  (no hit -> no price row created).
+- **Add model** (`POST /admin/api/models`): the request body gains four
+  **optional** price fields (`price_in`, `price_out`, `cache_read`,
+  `cache_write`, USD per million tokens, non-negative). After
+  `upsert_from_body` successfully inserts the model, the price row for that
+  `model_id` is resolved with this precedence:
+  1. If **any** of the four price fields is present in the request, use the
+     provided values (absent ones default to 0) and write them to `prices`.
+     User-supplied prices take priority — fuzzy match is **not** run.
+  2. Otherwise (no price fields at all in the request), run
+     `defaults_match(model)`; on a hit, insert the matched four prices; on no
+     hit, create no price row.
+  This makes the shared add/edit dialog's price inputs meaningful on add: a
+  hand-filled price is honored and never overwritten by a default.
 - **Edit prices** (NEW `PUT /admin/api/models/:id/prices`): body
   `{ price_in, price_out, cache_read, cache_write }` (USD per million tokens,
   non-negative), upserted into `prices`.
@@ -258,11 +293,12 @@ untouched and remain faithful to the upstream.
 1. **Add/edit dialog** (`web/src/features/models/components/models-action-dialog.tsx`):
    a price block with four numeric inputs — input / output / cache-read /
    cache-write price (labeled USD per million tokens).
-   - **Add:** the four fields are left empty; on save the backend fuzzy-matches
-     and fills defaults. (The user may also hand-fill before saving, which the
-     backend treats as the provided value.) Pre-fill on add is intentionally
-     skipped to keep the flow simple; the matched defaults are visible on the
-     next edit / in the list.
+   - **Add:** the four fields start empty. If the user leaves them empty, the
+     backend fuzzy-matches and fills defaults on save. If the user fills any of
+     them, those values are sent in the `POST /admin/api/models` body and take
+     priority over fuzzy match (per the Backend API precedence). Either way the
+     resulting prices are visible on the next edit / in the list; the dialog
+     does not pre-fetch defaults before save.
    - **Edit:** the four fields are back-filled from the existing `prices` row;
      on change the dialog calls `PUT /admin/api/models/:id/prices`.
    - The form schema (`web/src/features/models/data/schema.ts`) gains four
@@ -296,6 +332,15 @@ tests + wiremock, consistent with the codebase.
   cache-read/cache-write tokens (construct a `ModelUsage` and assert the
   computed cost); include the no-cache case where `billable_input_tokens ==
   input_tokens` and cost equals today's formula.
+- **Usage stat folding**: `write_stats` aggregates the input dimension as
+  `billable_input_tokens + cache_read_tokens + cache_write_tokens`; assert the
+  recorded `usage_hourly` input and `request_log.total_tokens` for an
+  Anthropic-style `ModelUsage` (input excludes cache) and an OpenAI-style one
+  (billable + cache = echoed input) both yield the same true total.
+- **Add-model price precedence**: `POST /admin/api/models` with explicit price
+  fields writes those values and skips fuzzy match; the same POST with no price
+  fields falls back to `defaults_match`. (Integration test via the admin API,
+  alongside the existing model-create tests.)
 - **Connector cache extraction**: for each of the three connectors, feed a
   usage JSON carrying the cache fields and assert echoed `input_tokens`
   (unchanged from upstream), `billable_input_tokens`, `cache_read_tokens`, and
@@ -322,10 +367,10 @@ tests + wiremock, consistent with the codebase.
 | `src/connector/chat.rs` | Extract `cached_tokens`, compute billable input (non-stream + SSE) |
 | `src/connector/anthropic.rs` | Extract cache_read/cache_creation tokens, set billable input (non-stream + SSE) |
 | `src/connector/responses.rs` | Extract `cached_tokens`, compute billable input (non-stream + SSE) |
-| `src/pipeline.rs` | `cost_for` bills billable_input + cache-read + cache-write + output |
+| `src/pipeline.rs` | `cost_for` bills billable_input + cache-read + cache-write + output; `write_stats` folds cache tokens into the input dimension |
+| `src/admin/api.rs` | Add-model: optional price fields (priority over fuzzy match) else `defaults_match` fill; `PUT /admin/api/models/:id/prices` |
 | `src/price_refresh.rs` (or similar) | New — refresh function + `spawn_price_refresh_loop` |
 | `src/main.rs` | Spawn the daily price-refresh loop; startup snapshot init |
-| `src/admin/api.rs` | Add-model fuzzy-match fill; `PUT /admin/api/models/:id/prices` |
 | `web/src/features/models/components/models-action-dialog.tsx` | Four price inputs |
 | `web/src/features/models/components/models-columns.tsx` | Price column |
 | `web/src/features/models/data/schema.ts` | Four optional price fields |
