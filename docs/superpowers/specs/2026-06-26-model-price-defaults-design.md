@@ -325,22 +325,36 @@ for the per-model "real" row uses the same folded value.
      `defaults_match(model)`; on a hit, build a `PriceRow` from the returned
      `PriceValues` plus the local `model_id` and upsert it; on no hit, create no
      price row.
-  This makes the shared add/edit dialog's price inputs meaningful on add: a
-  hand-filled price is honored and never overwritten by a default.
+
+  **"Present" definition (avoids empty-input → 0-price bug):** a price field is
+  "present" only if it deserializes to a **finite number**. The four fields are
+  typed as `Option<f64>` in the request body; `None` (absent / JSON `null`)
+  counts as not-present. The backend additionally rejects non-finite values
+  (NaN / infinity) and negatives as a 400. So an empty form input must arrive as
+  absent/`null`, not `0` or `""` — see the frontend rule below. Precedence is
+  decided by "any of the four is present", i.e. any is `Some(finite)`.
 - **Edit prices** (NEW `PUT /admin/api/models/:id/prices`): body
   `{ price_in, price_out, cache_read, cache_write }` (USD per million tokens,
-  non-negative), upserted into `prices`.
+  non-negative finite numbers), upserted into `prices`.
 - **Read prices:** the frontend reuses the existing
   `GET /admin/api/stats/prices` (returns all price rows) and merges by
   `model_id` on the models page — smaller backend change than augmenting the
   model list response.
-- **Delete model:** does NOT cascade-delete the `prices` row (harmless to keep;
-  re-adding a same-named model reuses it).
+- **Delete model** (`DELETE /admin/api/models/:id`): after the existing
+  in-use reference check passes and `model_delete(id)` succeeds, also delete the
+  `prices` row for that `model_id` (a new `price_delete(model_id)` method),
+  within the same logical operation. This prevents orphan price rows — otherwise
+  `GET /admin/api/stats/prices` would keep returning the deleted model's price
+  and the dashboard price table would still show it. (Because `prices.model_id
+  == models.id`, an orphan could only ever be "reused" by re-creating the exact
+  same local `id`, not the same upstream model name — so retention has no real
+  benefit and a clear downside.)
 
 `src/db/prices.rs` is extended:
 
 - `PriceRow` gains `cache_read` and `cache_write`; `price_upsert` writes all
-  four.
+  four. New `price_delete(model_id)` removes a model's price row (called on
+  model delete).
 - New `price_defaults` methods: `defaults_replace_all(rows)` where each row is a
   `(model_key, PriceValues)` pair (single-transaction full-table rewrite of the
   snapshot) and `defaults_match(model: &str) -> Option<PriceValues>` (the 4-step
@@ -360,10 +374,21 @@ for the per-model "real" row uses the same folded value.
      priority over fuzzy match (per the Backend API precedence). Either way the
      resulting prices are visible on the next edit / in the list; the dialog
      does not pre-fetch defaults before save.
+   - **Empty-field serialization rule (critical):** an empty price input must be
+     **omitted** from the POST payload, not sent as `""`, `null`, or `0`. The
+     submit handler strips any price field whose input is blank/`NaN` before
+     building the request body, so "left empty" reaches the backend as absent
+     and the fuzzy-match path runs. (Without this, a coerced `0` would read as
+     "present" and write a 0 price, suppressing the default — the bug this rule
+     prevents.) A field the user typed `0` into is intentional and IS sent.
    - **Edit:** the four fields are back-filled from the existing `prices` row;
-     on change the dialog calls `PUT /admin/api/models/:id/prices`.
-   - The form schema (`web/src/features/models/data/schema.ts`) gains four
-     optional non-negative number fields.
+     on change the dialog calls `PUT /admin/api/models/:id/prices`. Empty inputs
+     on the edit form are likewise omitted (treated as "unset"); the four PUT
+     fields a user clears fall back to 0 only if they explicitly enter 0.
+   - The form schema (`web/src/features/models/data/schema.ts`) types the four
+     fields as optional numbers (`z.coerce.number().nonnegative().optional()`
+     or equivalent), with blank inputs normalized to `undefined` so they are
+     dropped from the payload rather than coerced to 0.
 2. **List column** (`web/src/features/models/components/models-columns.tsx`):
    a price column showing prices compactly (e.g. in/out as the primary pair,
    cache prices omitted or in a tooltip to avoid an over-wide column). The
@@ -391,7 +416,8 @@ tests + wiremock, consistent with the codebase.
   four columns `x1e6`; `sample_spec` is skipped; an entry without
   `input_cost_per_token` is skipped; absent cache/output fields -> 0.
 - **DB**: `price_defaults` full-table rewrite transaction; `prices` four-field
-  upsert.
+  upsert; `price_delete` removes a row (and a no-op delete of an absent
+  model_id succeeds).
 - **Cost formula**: `cost_for` with `billable_input_tokens` +
   cache-read/cache-write tokens (construct a `ModelUsage` and assert the
   computed cost); include the no-cache case where `billable_input_tokens ==
@@ -402,9 +428,13 @@ tests + wiremock, consistent with the codebase.
   Anthropic-style `ModelUsage` (input excludes cache) and an OpenAI-style one
   (billable + cache = echoed input) both yield the same true total.
 - **Add-model price precedence**: `POST /admin/api/models` with explicit price
-  fields writes those values and skips fuzzy match; the same POST with no price
-  fields falls back to `defaults_match`. (Integration test via the admin API,
-  alongside the existing model-create tests.)
+  fields writes those values and skips fuzzy match; the same POST with the price
+  fields absent/`null` falls back to `defaults_match`; a POST with `price_in: 0`
+  (explicit zero) is treated as present and writes 0 (not a fuzzy match).
+  (Integration test via the admin API, alongside the existing model-create
+  tests.)
+- **Delete cascade**: deleting a model removes its `prices` row, and
+  `GET /admin/api/stats/prices` no longer returns it.
 - **Connector cache extraction**: for each of the three connectors, feed a
   usage JSON carrying the cache fields and assert echoed `input_tokens`
   (unchanged from upstream), `billable_input_tokens`, `cache_read_tokens`, and
@@ -426,13 +456,13 @@ tests + wiremock, consistent with the codebase.
 | `build.rs` | Embed (or expose) the committed litellm JSON snapshot |
 | `<bundled litellm snapshot JSON>` | New — committed default snapshot (path set in plan; rust-embed source) |
 | `src/db/schema.rs` | New `price_defaults` table; `prices` +2 columns (cache_read, cache_write) |
-| `src/db/prices.rs` | `PriceRow` +2 fields; `price_upsert` 4 fields; `defaults_replace_all`, `defaults_match` |
+| `src/db/prices.rs` | `PriceRow` +2 fields; `price_upsert` 4 fields; `price_delete`; `defaults_replace_all`, `defaults_match` |
 | `src/unified.rs` | `ModelUsage` +cache_read_tokens, +cache_write_tokens, +billable_input_tokens |
 | `src/connector/chat.rs` | Extract `cached_tokens`, compute billable input (non-stream + SSE) |
 | `src/connector/anthropic.rs` | Extract cache_read/cache_creation tokens, set billable input (non-stream + SSE) |
 | `src/connector/responses.rs` | Extract `cached_tokens`, compute billable input (non-stream + SSE) |
 | `src/pipeline.rs` | `cost_for` bills billable_input + cache-read + cache-write + output; `write_stats` folds cache tokens into the input dimension |
-| `src/admin/api.rs` | Add-model: optional price fields (priority over fuzzy match) else `defaults_match` fill; `PUT /admin/api/models/:id/prices` |
+| `src/admin/api.rs` | Add-model: optional finite-number price fields (priority over fuzzy match) else `defaults_match` fill; `PUT /admin/api/models/:id/prices`; delete-model cascades `price_delete` |
 | `src/price_refresh.rs` (or similar) | New — refresh function + `spawn_price_refresh_loop` |
 | `src/main.rs` | Spawn the daily price-refresh loop; startup snapshot init |
 | `web/src/features/models/components/models-action-dialog.tsx` | Four price inputs |
