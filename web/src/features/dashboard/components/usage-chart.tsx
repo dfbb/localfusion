@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import {
   LineChart,
@@ -51,6 +52,7 @@ interface Props {
 }
 
 export function UsageChart({ range }: Props) {
+  const { t } = useTranslation()
   const { data: rows = [], isLoading } = useQuery<UsageRow[]>({
     queryKey: ['usage', range.from, range.to, range.granularity],
     queryFn: () =>
@@ -90,10 +92,11 @@ export function UsageChart({ range }: Props) {
         <YAxis yAxisId="tokens" tick={{ fontSize: 11 }} tickFormatter={(v) => (v / 1000).toFixed(0) + 'K'} />
         <YAxis yAxisId="cost" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => '$' + v.toFixed(3)} />
         <Tooltip
-          formatter={(value, name) =>
-            name === 'total_tokens'
-              ? [(value as number).toLocaleString() + ' tokens', 'Token']
-              : ['$' + (value as number).toFixed(4), '费用']
+          formatter={(value, _name, item) =>
+            // Branch on stable dataKey, not the translated name prop
+            (item as any)?.dataKey === 'total_tokens'
+              ? [(value as number).toLocaleString() + ' tokens', t('dashboard.colTotalTokens')]
+              : ['$' + (value as number).toFixed(4), t('dashboard.costTooltip')]
           }
         />
         <Legend />
@@ -101,7 +104,7 @@ export function UsageChart({ range }: Props) {
           yAxisId="tokens"
           type="monotone"
           dataKey="total_tokens"
-          name="total_tokens"
+          name={t('dashboard.colTotalTokens')}
           stroke="hsl(221 83% 53%)"
           dot={false}
           strokeWidth={2}
@@ -110,7 +113,7 @@ export function UsageChart({ range }: Props) {
           yAxisId="cost"
           type="monotone"
           dataKey="cost"
-          name="cost"
+          name={t('dashboard.costTooltip')}
           stroke="hsl(142 76% 36%)"
           dot={false}
           strokeWidth={2}

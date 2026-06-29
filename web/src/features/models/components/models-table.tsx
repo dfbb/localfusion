@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import {
   type ColumnFiltersState,
   type SortingState,
@@ -31,6 +32,7 @@ import { modelsColumns } from './models-columns'
 const CONNECTORS = ['chat', 'anthropic', 'responses']
 
 export function ModelsTable() {
+  const { t } = useTranslation()
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
@@ -69,7 +71,7 @@ export function ModelsTable() {
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="搜索 ID..."
+          placeholder={t('models.searchId')}
             value={idFilter}
             onChange={(e) => table.getColumn('id')?.setFilterValue(e.target.value || undefined)}
             className="pl-8 h-8 w-48"
@@ -94,7 +96,7 @@ export function ModelsTable() {
               onClick={() => table.getColumn('connector')?.setFilterValue(undefined)}
             >
               <X className="h-3 w-3 mr-1" />
-              重置
+              {t('common.reset')}
             </Button>
           )}
         </div>
@@ -120,7 +122,7 @@ export function ModelsTable() {
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={modelsColumns.length} className="h-24 text-center text-muted-foreground">
-                  加载中...
+                  {t('common.loading')}
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows.length ? (
@@ -136,7 +138,7 @@ export function ModelsTable() {
             ) : (
               <TableRow>
                 <TableCell colSpan={modelsColumns.length} className="h-24 text-center text-muted-foreground">
-                  暂无模型
+                  {t('models.noModels')}
                 </TableCell>
               </TableRow>
             )}
@@ -147,7 +149,7 @@ export function ModelsTable() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          共 {table.getFilteredRowModel().rows.length} 条
+          {t('common.totalRows', { count: table.getFilteredRowModel().rows.length })}
         </p>
         <div className="flex items-center gap-2">
           <Button

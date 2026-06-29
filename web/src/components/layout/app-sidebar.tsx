@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 import {
@@ -14,6 +15,7 @@ import {
 import { sidebarData } from './data/sidebar-data'
 
 export function AppSidebar() {
+  const { t } = useTranslation()
   const location = useLocation()
 
   return (
@@ -39,14 +41,14 @@ export function AppSidebar() {
       <SidebarContent>
         {sidebarData.navGroups.map((group) => (
           <SidebarGroup key={group.title}>
-            <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
+            <SidebarGroupLabel>{t(group.title)}</SidebarGroupLabel>
             <SidebarMenu>
               {group.items.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
                     isActive={location.pathname === item.url || location.pathname.startsWith(item.url + '/')}
-                    tooltip={item.title}
+                    tooltip={t(item.title)}
                   >
                     <Link to={item.url}>
                       {item.icon && (
@@ -58,7 +60,7 @@ export function AppSidebar() {
                           )}
                         />
                       )}
-                      <span>{item.title}</span>
+                      <span>{t(item.title)}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Label as LabelPrimitive } from 'radix-ui'
 import { api } from '@/lib/api'
@@ -26,6 +27,7 @@ type Props = {
 
 export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
   const qc = useQueryClient()
+  const { t } = useTranslation()
   const [aclAll, setAclAll] = useState(true)
   const [selected, setSelected] = useState<string[]>([])
 
@@ -50,10 +52,10 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['keys'] })
-      toast.success('ACL 已更新')
+      toast.success(t('keys.aclUpdated'))
       onOpenChange(false)
     },
-    onError: () => toast.error('更新失败'),
+    onError: () => toast.error(t('common.updateFailed')),
   })
 
   function toggleModel(name: string) {
@@ -66,9 +68,9 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
     <Dialog open={open} onOpenChange={(s) => { if (!save.isPending) onOpenChange(s) }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑 ACL — {currentRow.label}</DialogTitle>
+          <DialogTitle>{t('keys.aclDialogTitle', { label: currentRow.label })}</DialogTitle>
           <DialogDescription>
-            设置此密钥可访问的虚拟模型范围。
+            {t('keys.aclDialogDesc')}
           </DialogDescription>
         </DialogHeader>
 
@@ -78,13 +80,13 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
             <div className="flex items-center gap-2">
               <RadioGroupItem value="all" id="acl-all" />
               <LabelPrimitive.Root htmlFor="acl-all" className="text-sm cursor-pointer">
-                允许访问全部虚拟模型
+                {t('keys.aclAllLabel')}
               </LabelPrimitive.Root>
             </div>
             <div className="flex items-center gap-2">
               <RadioGroupItem value="whitelist" id="acl-whitelist" />
               <LabelPrimitive.Root htmlFor="acl-whitelist" className="text-sm cursor-pointer">
-                指定白名单
+                {t('keys.aclWhitelistLabel')}
               </LabelPrimitive.Root>
             </div>
           </RadioGroup>
@@ -93,7 +95,7 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
           {!aclAll && (
             <div className="space-y-2 max-h-48 overflow-y-auto rounded border p-3">
               {vmodels.length === 0 ? (
-                <p className="text-sm text-muted-foreground">暂无虚拟模型</p>
+                <p className="text-sm text-muted-foreground">{t('keys.noVirtualModels')}</p>
               ) : (
                 vmodels.map((vm) => (
                   <LabelPrimitive.Root
@@ -116,10 +118,10 @@ export function KeysAclDialog({ open, onOpenChange, currentRow }: Props) {
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button onClick={() => save.mutate()} disabled={save.isPending}>
-            {save.isPending ? '保存中…' : '保存'}
+            {save.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

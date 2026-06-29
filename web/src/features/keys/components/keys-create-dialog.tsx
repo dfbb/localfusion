@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ type Props = {
 export function KeysCreateDialog({ open, onOpenChange }: Props) {
   const [label, setLabel] = useState('')
   const { setOpen, setCreateResult } = useKeys()
+  const { t } = useTranslation()
   const qc = useQueryClient()
 
   const create = useMutation({
@@ -35,7 +37,7 @@ export function KeysCreateDialog({ open, onOpenChange }: Props) {
       onOpenChange(false)
       setOpen('result')
     },
-    onError: () => toast.error('创建失败'),
+    onError: () => toast.error(t('common.createFailed')),
   })
 
   function handleSubmit(e: React.FormEvent) {
@@ -56,12 +58,12 @@ export function KeysCreateDialog({ open, onOpenChange }: Props) {
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>新建密钥</DialogTitle>
-          <DialogDescription>输入标签后创建一个新的接入密钥。</DialogDescription>
+          <DialogTitle>{t('keys.createTitle')}</DialogTitle>
+          <DialogDescription>{t('keys.createDesc')}</DialogDescription>
         </DialogHeader>
         <form id="key-create-form" onSubmit={handleSubmit} className="py-2">
           <Input
-            placeholder="标签（如 my-app）"
+            placeholder={t('keys.labelPlaceholder')}
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             autoFocus
@@ -73,7 +75,7 @@ export function KeysCreateDialog({ open, onOpenChange }: Props) {
             form="key-create-form"
             disabled={create.isPending || !label.trim()}
           >
-            {create.isPending ? '创建中…' : '创建'}
+            {create.isPending ? t('keys.creating') : t('common.create')}
           </Button>
         </DialogFooter>
       </DialogContent>

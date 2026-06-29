@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Label as LabelPrimitive } from 'radix-ui'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
@@ -20,11 +21,12 @@ type Props = {
 }
 
 export function StrategyParamsForm({ strategyName, strategies, models, value, onChange }: Props) {
+  const { t } = useTranslation()
   const strategy = strategies.find((s) => s.name === strategyName)
   const properties = strategy?.params_schema?.properties
 
   if (!properties || Object.keys(properties).length === 0) {
-    return <p className="text-sm text-muted-foreground">该策略无额外参数。</p>
+    return <p className="text-sm text-muted-foreground">{t('virtualModels.noStrategyParams')}</p>
   }
 
   function set(key: string, val: unknown) {
@@ -49,7 +51,7 @@ export function StrategyParamsForm({ strategyName, strategies, models, value, on
                   onValueChange={(v) => set(key, v)}
                 >
                   <SelectTrigger className="w-full h-8">
-                    <SelectValue placeholder="选择模型..." />
+                    <SelectValue placeholder={t('virtualModels.selectModel')} />
                   </SelectTrigger>
                   <SelectContent>
                     {models.map((m) => (

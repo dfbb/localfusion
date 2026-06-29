@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -27,6 +28,7 @@ type LoggingConfig = {
 }
 
 export function LoggingForm() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
 
   const { data, isLoading } = useQuery<LoggingConfig>({
@@ -42,10 +44,10 @@ export function LoggingForm() {
     mutationFn: (v: LoggingConfig) => api.put('/settings/logging', v),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['logging'] })
-      toast.success('已保存（文件/控制台改动需重启）')
+      toast.success(t('settings.savedWithRestart'))
     },
     onError: () => {
-      toast.error('保存失败')
+      toast.error(t('common.saveFailed'))
     },
   })
 
@@ -53,19 +55,19 @@ export function LoggingForm() {
   const logLevel = watch('log_level')
 
   if (isLoading) {
-    return <div className="text-muted-foreground text-sm">加载中...</div>
+    return <div className="text-muted-foreground text-sm">{t('common.loading')}</div>
   }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>日志配置</CardTitle>
-        <CardDescription>配置日志级别和输出目标。修改文件/控制台选项需重启服务生效。</CardDescription>
+        <CardTitle>{t('settings.loggingTitle')}</CardTitle>
+        <CardDescription>{t('settings.loggingDescription')}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit((v) => save.mutate(v))} className="space-y-6">
           <div className="space-y-2">
-            <label className="text-sm font-medium">日志级别</label>
+            <label className="text-sm font-medium">{t('settings.logLevel')}</label>
             <Select
               value={logLevel}
               onValueChange={(v) => setValue('log_level', v)}
@@ -82,10 +84,10 @@ export function LoggingForm() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium">日志文件路径</label>
+            <label className="text-sm font-medium">{t('settings.logFilePath')}</label>
             <Input
               {...register('log_file')}
-              placeholder="留空表示不写文件（如 /var/log/localfusion.log）"
+              placeholder={t('settings.logFilePlaceholder')}
               className="max-w-md"
             />
           </div>
@@ -97,12 +99,12 @@ export function LoggingForm() {
               onCheckedChange={(v) => setValue('log_to_stdout', v)}
             />
             <label htmlFor="log_to_stdout" className="text-sm font-medium cursor-pointer">
-              输出到控制台（stdout）
+              {t('settings.logToStdout')}
             </label>
           </div>
 
           <Button type="submit" disabled={save.isPending}>
-            {save.isPending ? '保存中...' : '保存'}
+            {save.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </form>
       </CardContent>

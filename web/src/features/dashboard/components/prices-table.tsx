@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { formatDistanceToNow } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
@@ -17,10 +18,11 @@ interface PriceRow {
   model_id: string
   price_in: number  // $/M tokens
   price_out: number // $/M tokens
-  updated_at: number // Unix 秒
+  updated_at: number // Unix seconds
 }
 
 export function PricesTable() {
+  const { t, i18n } = useTranslation()
   const { data: rows = [], isLoading } = useQuery<PriceRow[]>({
     queryKey: ['prices'],
     queryFn: () => api.get('/stats/prices').then((r) => r.data),
@@ -30,16 +32,17 @@ export function PricesTable() {
 
   const now = Date.now()
   const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+  const dateFnsLocale = i18n.language === 'zh' ? zhCN : undefined
 
   return (
     <div className="overflow-hidden rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>模型</TableHead>
-            <TableHead>输入 ($/M)</TableHead>
-            <TableHead>输出 ($/M)</TableHead>
-            <TableHead>更新时间</TableHead>
+            <TableHead>{t('dashboard.colModel')}</TableHead>
+            <TableHead>{t('dashboard.colPriceIn')}</TableHead>
+            <TableHead>{t('dashboard.colPriceOut')}</TableHead>
+            <TableHead>{t('dashboard.colUpdatedAt')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -52,7 +55,7 @@ export function PricesTable() {
                   <TableCell>${row.price_in.toFixed(4)}</TableCell>
                   <TableCell>${row.price_out.toFixed(4)}</TableCell>
                   <TableCell className={cn('text-xs', stale && 'text-yellow-600 dark:text-yellow-400')}>
-                    {formatDistanceToNow(new Date(row.updated_at * 1000), { addSuffix: true, locale: zhCN })}
+                    {formatDistanceToNow(new Date(row.updated_at * 1000), { addSuffix: true, locale: dateFnsLocale })}
                     {stale && ' ⚠️'}
                   </TableCell>
                 </TableRow>
@@ -61,7 +64,7 @@ export function PricesTable() {
           ) : (
             <TableRow>
               <TableCell colSpan={4} className="h-20 text-center text-muted-foreground text-sm">
-                暂无价格数据
+                {t('dashboard.noPriceData')}
               </TableCell>
             </TableRow>
           )}

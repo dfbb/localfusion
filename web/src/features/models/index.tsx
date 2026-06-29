@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
 import { ModelsActionDialog } from './components/models-action-dialog'
@@ -27,17 +28,18 @@ function ModelsDialogs() {
 }
 
 export function Models() {
+  const { t } = useTranslation()
   return (
     <ModelsProvider>
       <Header fixed>
-        <h1 className="text-base font-medium">真实模型</h1>
+        <h1 className="text-base font-medium">{t('nav.models')}</h1>
       </Header>
 
       <Main className="flex flex-1 flex-col gap-4 sm:gap-6">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">模型列表</h2>
-            <p className="text-muted-foreground">管理上游 AI 模型连接配置。</p>
+            <h2 className="text-2xl font-bold tracking-tight">{t('models.pageTitle')}</h2>
+            <p className="text-muted-foreground">{t('models.pageSubtitle')}</p>
           </div>
           <ModelsPrimaryButtons />
         </div>

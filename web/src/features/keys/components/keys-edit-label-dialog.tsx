@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,7 @@ type Props = {
 
 export function KeysEditLabelDialog({ open, onOpenChange, currentRow }: Props) {
   const [label, setLabel] = useState(currentRow.label)
+  const { t } = useTranslation()
   const qc = useQueryClient()
 
   useEffect(() => {
@@ -32,10 +34,10 @@ export function KeysEditLabelDialog({ open, onOpenChange, currentRow }: Props) {
     mutationFn: (l: string) => api.patch(`/keys/${currentRow.id}`, { label: l }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['keys'] })
-      toast.success('标签已更新')
+      toast.success(t('keys.labelUpdated'))
       onOpenChange(false)
     },
-    onError: () => toast.error('更新失败'),
+    onError: () => toast.error(t('common.updateFailed')),
   })
 
   function handleSubmit(e: React.FormEvent) {
@@ -48,8 +50,8 @@ export function KeysEditLabelDialog({ open, onOpenChange, currentRow }: Props) {
     <Dialog open={open} onOpenChange={(s) => { if (!save.isPending) onOpenChange(s) }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>修改标签</DialogTitle>
-          <DialogDescription>修改密钥 {currentRow.label} 的标签。</DialogDescription>
+          <DialogTitle>{t('keys.editLabelTitle')}</DialogTitle>
+          <DialogDescription>{t('keys.editLabelDesc', { label: currentRow.label })}</DialogDescription>
         </DialogHeader>
         <form id="key-label-form" onSubmit={handleSubmit} className="py-2">
           <Input
@@ -60,10 +62,10 @@ export function KeysEditLabelDialog({ open, onOpenChange, currentRow }: Props) {
         </form>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={save.isPending}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button type="submit" form="key-label-form" disabled={save.isPending || !label.trim()}>
-            {save.isPending ? '保存中…' : '保存'}
+            {save.isPending ? t('common.saving') : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

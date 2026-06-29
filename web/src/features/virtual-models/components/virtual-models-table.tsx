@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnFiltersState,
@@ -29,6 +30,7 @@ import { type VirtualModelRow, type StrategyRow } from '../data/schema'
 import { virtualModelsColumns } from './virtual-models-columns'
 
 export function VirtualModelsTable() {
+  const { t } = useTranslation()
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
 
@@ -74,7 +76,7 @@ export function VirtualModelsTable() {
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="搜索名称..."
+            placeholder={t('virtualModels.searchName')}
             value={nameFilter}
             onChange={(e) => table.getColumn('name')?.setFilterValue(e.target.value || undefined)}
             className="pl-8 h-8 w-48"
@@ -99,7 +101,7 @@ export function VirtualModelsTable() {
               onClick={() => table.getColumn('strategy')?.setFilterValue(undefined)}
             >
               <X className="h-3 w-3 mr-1" />
-              重置
+              {t('common.reset')}
             </Button>
           )}
         </div>
@@ -125,7 +127,7 @@ export function VirtualModelsTable() {
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={virtualModelsColumns.length} className="h-24 text-center text-muted-foreground">
-                  加载中...
+                  {t('common.loading')}
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows.length ? (
@@ -141,7 +143,7 @@ export function VirtualModelsTable() {
             ) : (
               <TableRow>
                 <TableCell colSpan={virtualModelsColumns.length} className="h-24 text-center text-muted-foreground">
-                  暂无虚拟模型
+                  {t('virtualModels.noVirtualModels')}
                 </TableCell>
               </TableRow>
             )}
@@ -152,7 +154,7 @@ export function VirtualModelsTable() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          共 {table.getFilteredRowModel().rows.length} 条
+          {t('common.totalRows', { count: table.getFilteredRowModel().rows.length })}
         </p>
         <div className="flex items-center gap-2">
           <Button

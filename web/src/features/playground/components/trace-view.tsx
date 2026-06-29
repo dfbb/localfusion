@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import {
   Card,
@@ -30,9 +31,10 @@ function StatusBadge({ status }: { status?: string }) {
 }
 
 function MemberAnswers({ answers }: { answers: unknown[] }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">成员回答（{answers.length}）</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('playground.memberAnswers', { count: answers.length })}</p>
       <div className="space-y-2">
         {answers.map((a, i) => {
           const ans = a as Record<string, unknown>
@@ -59,18 +61,19 @@ function MemberAnswers({ answers }: { answers: unknown[] }) {
 }
 
 function JudgePanel({ judge }: { judge: Record<string, unknown> }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">裁判</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('playground.judgeLabel')}</p>
       {truthy(judge.input) && (
         <div className="rounded border p-3 text-xs font-mono whitespace-pre-wrap max-h-40 overflow-auto">
-          <span className="text-muted-foreground block mb-1">输入</span>
+          <span className="text-muted-foreground block mb-1">{t('playground.judgeInput')}</span>
           {toStr(judge.input)}
         </div>
       )}
       {truthy(judge.output) && (
         <div className="rounded border p-3 text-xs font-mono whitespace-pre-wrap max-h-40 overflow-auto">
-          <span className="text-muted-foreground block mb-1">输出</span>
+          <span className="text-muted-foreground block mb-1">{t('playground.judgeOutput')}</span>
           {toStr(judge.output)}
         </div>
       )}
@@ -79,9 +82,10 @@ function JudgePanel({ judge }: { judge: Record<string, unknown> }) {
 }
 
 function AttemptsTimeline({ attempts }: { attempts: unknown[] }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">尝试链（{attempts.length}）</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('playground.attemptsTimeline', { count: attempts.length })}</p>
       <div className="space-y-2">
         {attempts.map((a, i) => {
           const attempt = a as Record<string, unknown>
@@ -107,9 +111,10 @@ function AttemptsTimeline({ attempts }: { attempts: unknown[] }) {
 }
 
 function CandidatesTable({ candidates }: { candidates: unknown[] }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">候选对比（{candidates.length}）</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('playground.candidatesTable', { count: candidates.length })}</p>
       <div className="space-y-2">
         {candidates.map((c, i) => {
           const cand = c as Record<string, unknown>
@@ -120,10 +125,10 @@ function CandidatesTable({ candidates }: { candidates: unknown[] }) {
             <div key={i} className="flex flex-wrap gap-4 rounded border p-3 text-sm">
               {truthy(cand.model_id) && <span className="font-mono text-xs">{String(cand.model_id)}</span>}
               {throughput != null && (
-                <span className="text-muted-foreground text-xs">吞吐 {Number(throughput).toFixed(1)} tok/s</span>
+                <span className="text-muted-foreground text-xs">{t('playground.throughput', { value: Number(throughput).toFixed(1) })}</span>
               )}
               {cost != null && (
-                <span className="text-muted-foreground text-xs">预估成本 ${Number(cost).toFixed(6)}</span>
+                <span className="text-muted-foreground text-xs">{t('playground.estCost', { value: Number(cost).toFixed(6) })}</span>
               )}
             </div>
           )
@@ -134,9 +139,10 @@ function CandidatesTable({ candidates }: { candidates: unknown[] }) {
 }
 
 function TurnsTimeline({ turns }: { turns: unknown[] }) {
+  const { t } = useTranslation()
   return (
     <div className="space-y-2">
-      <p className="text-sm font-medium text-muted-foreground">对话轮次（{turns.length}）</p>
+      <p className="text-sm font-medium text-muted-foreground">{t('playground.turnsTimeline', { count: turns.length })}</p>
       <div className="space-y-2">
         {turns.map((t, i) => {
           const turn = t as Record<string, unknown>
@@ -172,6 +178,7 @@ function TurnsTimeline({ turns }: { turns: unknown[] }) {
 }
 
 export function TraceView({ strategy, detail }: TraceViewProps) {
+  const { t } = useTranslation()
   const status = typeof detail.status === 'string' ? detail.status : undefined
 
   const isPanelStrategy = strategy === 'synthesize' || strategy === 'best_of_n' || strategy === 'best-of-n'
@@ -186,7 +193,7 @@ export function TraceView({ strategy, detail }: TraceViewProps) {
     <Card>
       <CardHeader>
         <div className="flex items-center gap-3">
-          <CardTitle className="text-base">编排 Trace</CardTitle>
+          <CardTitle className="text-base">{t('playground.traceTitle')}</CardTitle>
           <Badge variant="outline">{strategy}</Badge>
           {status && <StatusBadge status={status} />}
         </div>

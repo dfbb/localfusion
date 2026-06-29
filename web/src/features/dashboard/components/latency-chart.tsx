@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart,
@@ -18,6 +19,7 @@ interface LatencyRow {
 }
 
 export function LatencyChart() {
+  const { t } = useTranslation()
   const { data: rows = [], isLoading } = useQuery<LatencyRow[]>({
     queryKey: ['latency'],
     queryFn: () => api.get('/stats/latency').then((r) => r.data),
@@ -28,7 +30,7 @@ export function LatencyChart() {
   if (!rows.length) {
     return (
       <div className="flex h-32 items-center justify-center rounded-md border text-sm text-muted-foreground">
-        暂无延迟数据
+        {t('dashboard.noLatencyData')}
       </div>
     )
   }
@@ -48,7 +50,7 @@ export function LatencyChart() {
         <Tooltip
           formatter={(v, name) =>
             name === 'throughput'
-              ? [`${v} tok/s`, '吞吐量']
+              ? [`${v} tok/s`, t('dashboard.throughputLabel')]
               : [`${v}`, name]
           }
         />

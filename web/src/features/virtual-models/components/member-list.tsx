@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +26,8 @@ type Props = {
 }
 
 export function MemberList({ value, onChange, models, hint }: Props) {
+  const { t } = useTranslation()
+
   function handleChange(i: number, modelId: string) {
     const next = [...value]
     next[i] = modelId
@@ -49,7 +52,7 @@ export function MemberList({ value, onChange, models, hint }: Props) {
           <span className="w-5 text-xs text-muted-foreground text-right shrink-0">{i + 1}.</span>
           <Select value={memberId} onValueChange={(v) => handleChange(i, v)}>
             <SelectTrigger className="flex-1 h-8">
-              <SelectValue placeholder="选择模型..." />
+              <SelectValue placeholder={t('virtualModels.selectModel')} />
             </SelectTrigger>
             <SelectContent>
               {models.map((m) => (
@@ -92,7 +95,7 @@ export function MemberList({ value, onChange, models, hint }: Props) {
         </div>
       ))}
       <Button type="button" variant="outline" size="sm" className="w-full" onClick={handleAdd}>
-        + 添加成员
+        {t('virtualModels.addMember')}
       </Button>
     </div>
   )

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { createFileRoute } from '@tanstack/react-router'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
@@ -8,10 +9,11 @@ export const Route = createFileRoute('/_authenticated/')({
 })
 
 function DashboardPage() {
+  const { t } = useTranslation()
   return (
     <>
       <Header fixed>
-        <h1 className="text-base font-medium">监控面板</h1>
+        <h1 className="text-base font-medium">{t('nav.dashboardPage')}</h1>
       </Header>
       <Main>
         <Dashboard />

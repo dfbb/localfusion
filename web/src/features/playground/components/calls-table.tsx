@@ -7,6 +7,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { useTranslation } from 'react-i18next'
 
 export type CallRecord = {
   model_id?: string
@@ -24,8 +25,10 @@ type CallsTableProps = {
 }
 
 export function CallsTable({ calls }: CallsTableProps) {
+  const { t } = useTranslation()
+
   if (!calls || calls.length === 0) {
-    return <p className="text-muted-foreground text-sm">无调用记录</p>
+    return <p className="text-muted-foreground text-sm">{t('playground.noCallRecords')}</p>
   }
 
   return (
@@ -33,12 +36,12 @@ export function CallsTable({ calls }: CallsTableProps) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>模型</TableHead>
-            <TableHead>角色</TableHead>
+            <TableHead>{t('playground.colModel')}</TableHead>
+            <TableHead>{t('playground.colRole')}</TableHead>
             <TableHead className="text-right">Token</TableHead>
-            <TableHead className="text-right">费用($)</TableHead>
-            <TableHead>状态</TableHead>
-            <TableHead className="text-right">延迟(s)</TableHead>
+            <TableHead className="text-right">{t('playground.colCost')}</TableHead>
+            <TableHead>{t('common.status')}</TableHead>
+            <TableHead className="text-right">{t('playground.colLatency')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

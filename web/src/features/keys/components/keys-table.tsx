@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-table'
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,6 +25,7 @@ import { keysColumns } from './keys-columns'
 
 export function KeysTable() {
   const [sorting, setSorting] = useState<SortingState>([])
+  const { t } = useTranslation()
 
   const { data = [], isLoading } = useQuery<KeyRow[]>({
     queryKey: ['keys'],
@@ -61,7 +63,7 @@ export function KeysTable() {
             {isLoading ? (
               <TableRow>
                 <TableCell colSpan={keysColumns.length} className="h-24 text-center text-muted-foreground">
-                  加载中...
+                  {t('common.loading')}
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows.length ? (
@@ -77,7 +79,7 @@ export function KeysTable() {
             ) : (
               <TableRow>
                 <TableCell colSpan={keysColumns.length} className="h-24 text-center text-muted-foreground">
-                  暂无密钥
+                  {t('keys.noKeys')}
                 </TableCell>
               </TableRow>
             )}
@@ -86,7 +88,7 @@ export function KeysTable() {
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">共 {table.getRowModel().rows.length} 条</p>
+        <p className="text-sm text-muted-foreground">{t('common.totalRows', { count: table.getRowModel().rows.length })}</p>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"

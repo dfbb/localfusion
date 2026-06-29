@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { format, subDays, subHours } from 'date-fns'
 import { CalendarIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -7,8 +8,8 @@ import { Input } from '@/components/ui/input'
 export type Granularity = 'hour' | 'day' | 'week'
 
 export interface DateRange {
-  from: number // Unix 秒
-  to: number   // Unix 秒
+  from: number // Unix seconds
+  to: number   // Unix seconds
   granularity: Granularity
 }
 
@@ -17,16 +18,17 @@ interface Props {
   onChange: (v: DateRange) => void
 }
 
-const PRESETS: { label: string; hours: number; granularity: Granularity }[] = [
-  { label: '近 24h', hours: 24, granularity: 'hour' },
-  { label: '近 7 天', hours: 24 * 7, granularity: 'day' },
-  { label: '近 30 天', hours: 24 * 30, granularity: 'week' },
-]
-
 const toSecs = (d: Date) => Math.floor(d.getTime() / 1000)
 
 export function RangePicker({ value, onChange }: Props) {
+  const { t } = useTranslation()
   const [custom, setCustom] = useState(false)
+
+  const PRESETS: { label: string; hours: number; granularity: Granularity }[] = [
+    { label: t('dashboard.preset24h'), hours: 24, granularity: 'hour' },
+    { label: t('dashboard.preset7d'), hours: 24 * 7, granularity: 'day' },
+    { label: t('dashboard.preset30d'), hours: 24 * 30, granularity: 'week' },
+  ]
 
   function applyPreset(hours: number, granularity: Granularity) {
     const to = new Date()
@@ -70,7 +72,7 @@ export function RangePicker({ value, onChange }: Props) {
         onClick={() => setCustom((v) => !v)}
       >
         <CalendarIcon className="mr-1 h-3.5 w-3.5" />
-        自定义
+        {t('dashboard.customRange')}
       </Button>
       {custom && (
         <>

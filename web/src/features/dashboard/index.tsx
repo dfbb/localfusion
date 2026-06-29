@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { subHours } from 'date-fns'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { RangePicker, type DateRange } from './components/range-picker'
@@ -20,6 +21,7 @@ function defaultRange(): DateRange {
 }
 
 export function Dashboard() {
+  const { t } = useTranslation()
   const [range, setRange] = useState<DateRange>(defaultRange)
 
   return (
@@ -27,8 +29,8 @@ export function Dashboard() {
       {/* Time Range */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">监控面板</h2>
-          <p className="text-muted-foreground text-sm">查看用量、性能与价格数据。</p>
+          <h2 className="text-2xl font-bold tracking-tight">{t('nav.dashboardPage')}</h2>
+          <p className="text-muted-foreground text-sm">{t('dashboard.subtitle')}</p>
         </div>
         <RangePicker value={range} onChange={setRange} />
       </div>
@@ -39,8 +41,8 @@ export function Dashboard() {
       {/* Usage Chart + Ranking Tabs */}
       <Tabs defaultValue="chart">
         <TabsList>
-          <TabsTrigger value="chart">用量趋势</TabsTrigger>
-          <TabsTrigger value="ranking">模型排行</TabsTrigger>
+          <TabsTrigger value="chart">{t('dashboard.tabUsage')}</TabsTrigger>
+          <TabsTrigger value="ranking">{t('dashboard.tabRanking')}</TabsTrigger>
         </TabsList>
         <TabsContent value="chart" className="mt-4">
           <UsageChart range={range} />
@@ -52,19 +54,19 @@ export function Dashboard() {
 
       {/* Latency */}
       <div>
-        <h3 className="mb-3 text-base font-semibold">吞吐延迟</h3>
+        <h3 className="mb-3 text-base font-semibold">{t('dashboard.sectionLatency')}</h3>
         <LatencyChart />
       </div>
 
       {/* Prices */}
       <div>
-        <h3 className="mb-3 text-base font-semibold">价格表</h3>
+        <h3 className="mb-3 text-base font-semibold">{t('dashboard.sectionPrices')}</h3>
         <PricesTable />
       </div>
 
       {/* Requests */}
       <div>
-        <h3 className="mb-3 text-base font-semibold">请求明细</h3>
+        <h3 className="mb-3 text-base font-semibold">{t('dashboard.sectionRequests')}</h3>
         <RequestsTable />
       </div>
     </div>

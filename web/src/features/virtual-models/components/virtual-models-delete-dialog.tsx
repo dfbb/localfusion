@@ -1,3 +1,4 @@
+import { useTranslation, Trans } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -19,26 +20,30 @@ type Props = {
 }
 
 export function VirtualModelsDeleteDialog({ open, onOpenChange, currentRow }: Props) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
 
   const del = useMutation({
     mutationFn: (name: string) => api.delete(`/virtual-models/${name}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vmodels'] })
-      toast.success('已删除')
+      toast.success(t('common.deleted'))
       onOpenChange(false)
     },
-    onError: () => toast.error('删除失败'),
+    onError: () => toast.error(t('common.deleteFailed')),
   })
 
   return (
     <Dialog open={open} onOpenChange={(s) => { if (!del.isPending) onOpenChange(s) }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-destructive">删除虚拟模型</DialogTitle>
+          <DialogTitle className="text-destructive">{t('virtualModels.deleteVirtualModel')}</DialogTitle>
           <DialogDescription>
-            确定要删除虚拟模型 <span className="font-mono font-semibold">{currentRow.name}</span> 吗？
-            此操作不可撤销。
+            <Trans
+              i18nKey="virtualModels.deleteConfirmBody"
+              values={{ name: currentRow.name, irreversible: t('common.irreversible') }}
+              components={{ name: <span className="font-mono font-semibold" /> }}
+            />
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -47,14 +52,14 @@ export function VirtualModelsDeleteDialog({ open, onOpenChange, currentRow }: Pr
             onClick={() => onOpenChange(false)}
             disabled={del.isPending}
           >
-            取消
+            {t('common.cancel')}
           </Button>
           <Button
             variant="destructive"
             onClick={() => del.mutate(currentRow.name)}
             disabled={del.isPending}
           >
-            {del.isPending ? '删除中…' : '确认删除'}
+            {del.isPending ? t('common.deleting') : t('virtualModels.confirmDelete')}
           </Button>
         </DialogFooter>
       </DialogContent>
