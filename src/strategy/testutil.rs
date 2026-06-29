@@ -20,7 +20,9 @@ impl Connector for MockConnector {
                 usage: Usage { input_tokens: in_tok, output_tokens: out_tok },
                 model_id: ctx.model.clone(),
                 calls: vec![ModelUsage { model_id: ctx.model.clone(), role: CallRole::Member,
-                    input_tokens: in_tok, output_tokens: out_tok, cost: 0.0,
+                    input_tokens: in_tok, output_tokens: out_tok, billable_input_tokens: in_tok,
+                    cache_read_tokens: 0, cache_write_tokens: 0,
+                    cost: 0.0,
                     status: CallStatus::Ok, estimated: false, latency_secs: 0.0 }] }),
             MockReply::Fail(m) => Err(ConnError::Http(m)),
         }
@@ -37,7 +39,9 @@ impl Connector for MockConnector {
                 tx.send(Ok(UnifiedStreamEvent::Done {
                     usage: Usage { input_tokens: in_tok, output_tokens: out_tok },
                     call: Some(ModelUsage { model_id: mid, role: CallRole::Member,
-                        input_tokens: in_tok, output_tokens: out_tok, cost: 0.0,
+                        input_tokens: in_tok, output_tokens: out_tok, billable_input_tokens: in_tok,
+                        cache_read_tokens: 0, cache_write_tokens: 0,
+                        cost: 0.0,
                         status: CallStatus::Ok, estimated: false, latency_secs: 0.0 }),
                     finish_reason: Some("stop".into()) })).await.ok();
                 Ok(UnifiedStream { rx, upstream_request_id: None })
