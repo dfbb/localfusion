@@ -16,7 +16,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { type ModelRow } from '../data/schema'
+import { type ModelRow, type Prices } from '../data/schema'
 import { useModels } from './models-provider'
 
 function StatusCell({ modelId }: { modelId: string }) {
@@ -171,6 +171,27 @@ export const modelsColumns: ColumnDef<ModelRow>[] = [
     id: 'status',
     header: 'Status',
     cell: ({ row }) => <StatusCell modelId={row.original.id} />,
+  },
+  {
+    id: 'price',
+    header: () => {
+      const { t } = useTranslation()
+      return t('models.priceColumn')
+    },
+    cell: ({ row, table }) => {
+      const { t } = useTranslation()
+      const meta = table.options.meta as { priceMap?: Map<string, Prices> } | undefined
+      const p = meta?.priceMap?.get(row.original.id)
+      if (!p) return <span className="text-muted-foreground">—</span>
+      return (
+        <span
+          className="text-sm tabular-nums"
+          title={`${t('models.cacheRead')}: ${p.cache_read} / ${t('models.cacheWrite')}: ${p.cache_write}`}
+        >
+          {p.price_in} / {p.price_out}
+        </span>
+      )
+    },
   },
   {
     id: 'actions',

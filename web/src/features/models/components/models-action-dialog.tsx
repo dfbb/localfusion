@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useModels } from './models-provider'
@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { modelSchema, type ModelForm, type ModelRow } from '../data/schema'
+import { modelSchema, type ModelForm, type ModelRow, type Prices } from '../data/schema'
 
 type Props = {
   open: boolean
@@ -93,6 +93,19 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
   // User-editable context window (extra.max_input_tokens), defaulting to 1M.
   const [maxInputTokens, setMaxInputTokens] = useState<number>(DEFAULT_MAX_INPUT_TOKENS)
 
+  // Prices (USD per million tokens). Separate from the RHF model form: add omits blanks,
+  // edit requires all four and saves via a dedicated PUT.
+  const [priceIn, setPriceIn] = useState<string>('')
+  const [priceOut, setPriceOut] = useState<string>('')
+  const [cacheRead, setCacheRead] = useState<string>('')
+  const [cacheWrite, setCacheWrite] = useState<string>('')
+
+  const { data: allPrices } = useQuery<Prices[]>({
+    queryKey: ['prices'],
+    queryFn: () => api.get('/stats/prices').then((r) => r.data),
+    enabled: open,
+  })
+
   const {
     register,
     handleSubmit,
@@ -123,25 +136,53 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
         // Models with a directly-entered key (api_key_enc set) should stay in 'direct' mode
         // even after reset clears the api_key field.
         setKeyMode(currentRow.api_key_enc ? 'direct' : currentRow.api_key_env ? 'env' : 'direct')
+        const pr = allPrices?.find((p) => p.model_id === currentRow.id)
+        setPriceIn(pr ? String(pr.price_in) : '0')
+        setPriceOut(pr ? String(pr.price_out) : '0')
+        setCacheRead(pr ? String(pr.cache_read) : '0')
+        setCacheWrite(pr ? String(pr.cache_write) : '0')
       } else {
         reset(defaultValues)
         setMaxInputTokens(DEFAULT_MAX_INPUT_TOKENS)
         setKeyMode('direct')
+        setPriceIn(''); setPriceOut(''); setCacheRead(''); setCacheWrite('')
       }
     }
-  }, [open, currentRow, reset])
+  }, [open, currentRow, reset, allPrices])
+
+  // Parse a price input; '' => undefined (omit), else Number (NaN guarded to undefined).
+  const num = (s: string): number | undefined => {
+    if (s.trim() === '') return undefined
+    const n = Number(s)
+    return Number.isFinite(n) && n >= 0 ? n : undefined
+  }
 
   const m = useMutation({
-    mutationFn: (v: ModelForm) =>
-      isEdit ? api.put(`/models/${v.id}`, v) : api.post('/models', v),
+    mutationFn: async (v: ModelForm) => {
+      if (isEdit) {
+        await api.put(`/models/${v.id}`, v)               // 1. model config
+        await api.put(`/models/${v.id}/prices`, {          // 2. prices (all four required)
+          price_in: num(priceIn) ?? 0,
+          price_out: num(priceOut) ?? 0,
+          cache_read: num(cacheRead) ?? 0,
+          cache_write: num(cacheWrite) ?? 0,
+        })
+      } else {
+        const payload: Record<string, unknown> = { ...v }
+        const pin = num(priceIn), pout = num(priceOut), pcr = num(cacheRead), pcw = num(cacheWrite)
+        if (pin !== undefined) payload.price_in = pin       // omit blanks => backend fuzzy-fills
+        if (pout !== undefined) payload.price_out = pout
+        if (pcr !== undefined) payload.cache_read = pcr
+        if (pcw !== undefined) payload.cache_write = pcw
+        await api.post('/models', payload)
+      }
+    },
     onSuccess: (_data, v) => {
       qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['prices'] })
       toast.success(t('common.saved'))
       onOpenChange(false)
-      if (isEdit) {
-        // Fire-and-forget: probe the saved model to auto-correct base_url/connector if needed
-        runTestOne(v.id)
-      }
+      if (isEdit) runTestOne(v.id)
     },
     onError: () => toast.error(t('common.saveFailed')),
   })
@@ -336,6 +377,34 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
             />
             <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
               {t('models.maxInputTokensHint')}
+            </p>
+          </div>
+
+          {/* Prices (USD per million tokens). Add: blank => omitted (backend fuzzy-fills).
+              Edit: all four required (full replace via PUT). */}
+          <div className="grid grid-cols-6 items-center gap-x-4 gap-y-1">
+            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
+              {t('models.priceIn')}
+            </LabelPrimitive.Root>
+            <Input className="col-span-4" type="number" min={0} step="any"
+              value={priceIn} onChange={(e) => setPriceIn(e.target.value)} placeholder="0" />
+            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
+              {t('models.priceOut')}
+            </LabelPrimitive.Root>
+            <Input className="col-span-4" type="number" min={0} step="any"
+              value={priceOut} onChange={(e) => setPriceOut(e.target.value)} placeholder="0" />
+            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
+              {t('models.cacheRead')}
+            </LabelPrimitive.Root>
+            <Input className="col-span-4" type="number" min={0} step="any"
+              value={cacheRead} onChange={(e) => setCacheRead(e.target.value)} placeholder="0" />
+            <LabelPrimitive.Root className="col-span-2 text-end text-sm font-medium">
+              {t('models.cacheWrite')}
+            </LabelPrimitive.Root>
+            <Input className="col-span-4" type="number" min={0} step="any"
+              value={cacheWrite} onChange={(e) => setCacheWrite(e.target.value)} placeholder="0" />
+            <p className="col-span-4 col-start-3 text-xs text-muted-foreground">
+              {t('models.priceHint')}
             </p>
           </div>
 

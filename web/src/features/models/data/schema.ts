@@ -23,3 +23,12 @@ export type ModelRow = {
   anthropic_version: string | null
   extra: string | null
 }
+
+export type Prices = {
+  model_id: string
+  price_in: number
+  price_out: number
+  cache_read: number
+  cache_write: number
+  updated_at: number
+}
