@@ -96,15 +96,23 @@ pub(super) fn parse_anthropic_response(json: &Value, model_id: &str) -> UnifiedR
         .pointer("/usage/output_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_read = json
+        .pointer("/usage/cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_write = json
+        .pointer("/usage/cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let call = ModelUsage {
         model_id: model_id.into(),
         role: CallRole::Member,
         input_tokens: input,
         output_tokens: output,
-        billable_input_tokens: input,
-        cache_read_tokens: 0,
-        cache_write_tokens: 0,
+        billable_input_tokens: input, // Anthropic input_tokens already excludes cached tokens
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
         cost: 0.0,
         status: CallStatus::Ok,
         estimated: json.get("usage").is_none(),
@@ -135,6 +143,8 @@ pub(super) struct AnthropicSseState {
     text: String,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
     /// Whether a usage field has been received
     has_usage: bool,
     stop_reason: Option<String>,
@@ -147,6 +157,8 @@ impl AnthropicSseState {
             text: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
             has_usage: false,
             stop_reason: None,
         }
@@ -176,6 +188,12 @@ impl SseTranslator for AnthropicSseState {
                 {
                     self.input_tokens = u;
                     self.has_usage = true;
+                }
+                if let Some(c) = evt.pointer("/message/usage/cache_read_input_tokens").and_then(|v| v.as_u64()) {
+                    self.cache_read_tokens = c;
+                }
+                if let Some(c) = evt.pointer("/message/usage/cache_creation_input_tokens").and_then(|v| v.as_u64()) {
+                    self.cache_write_tokens = c;
                 }
             }
             // Message delta: carries final output_tokens and stop_reason
@@ -222,8 +240,8 @@ impl SseTranslator for AnthropicSseState {
             input_tokens: self.input_tokens,
             output_tokens: out_tokens,
             billable_input_tokens: self.input_tokens,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: self.cache_write_tokens,
             cost: 0.0,
             status: CallStatus::Ok,
             estimated,
@@ -374,6 +392,25 @@ mod tests {
         let r = parse_anthropic_response(&json, "claude-x");
         assert_eq!(r.usage.input_tokens, 4);
         assert_eq!(r.usage.output_tokens, 6);
+    }
+
+    #[test]
+    fn parse_extracts_cache_tokens_and_billable() {
+        let json = serde_json::json!({
+            "content": [{"type": "text", "text": "答"}],
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 4,
+                "cache_read_input_tokens": 10,
+                "cache_creation_input_tokens": 20
+            }
+        });
+        let resp = parse_anthropic_response(&json, "claude-x");
+        let c = &resp.calls[0];
+        assert_eq!(c.input_tokens, 50);
+        assert_eq!(c.billable_input_tokens, 50); // Anthropic input_tokens already excludes cached
+        assert_eq!(c.cache_read_tokens, 10);
+        assert_eq!(c.cache_write_tokens, 20);
     }
 
     #[test]

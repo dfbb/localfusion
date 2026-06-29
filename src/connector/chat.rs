@@ -118,14 +118,20 @@ pub(super) fn parse_chat_response(json: &Value, model_id: &str) -> UnifiedRespon
         .pointer("/usage/completion_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_read = json
+        .pointer("/usage/prompt_tokens_details/cached_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    // OpenAI prompt_tokens INCLUDES cached_tokens; billable input is the non-cached remainder.
+    let billable = input.saturating_sub(cache_read);
 
     let call = ModelUsage {
         model_id: model_id.into(),
         role: CallRole::Member,
         input_tokens: input,
         output_tokens: output,
-        billable_input_tokens: input,
-        cache_read_tokens: 0,
+        billable_input_tokens: billable,
+        cache_read_tokens: cache_read,
         cache_write_tokens: 0,
         cost: 0.0,
         status: CallStatus::Ok,
@@ -156,6 +162,7 @@ pub(super) struct ChatSseState {
     text: String,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
     /// Whether a usage field has been received (when stream_options.include_usage=true)
     has_usage: bool,
     finish_reason: Option<String>,
@@ -168,6 +175,7 @@ impl ChatSseState {
             text: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
             has_usage: false,
             finish_reason: None,
         }
@@ -190,6 +198,10 @@ impl SseTranslator for ChatSseState {
                     .unwrap_or(0);
                 self.output_tokens = u
                     .get("completion_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                self.cache_read_tokens = u
+                    .pointer("/prompt_tokens_details/cached_tokens")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
                 self.has_usage = true;
@@ -230,6 +242,7 @@ impl SseTranslator for ChatSseState {
         } else {
             (self.text.chars().count() / 4) as u64
         };
+        let billable = self.input_tokens.saturating_sub(self.cache_read_tokens);
 
         let usage = Usage {
             input_tokens: self.input_tokens,
@@ -240,8 +253,8 @@ impl SseTranslator for ChatSseState {
             role: CallRole::Member,
             input_tokens: self.input_tokens,
             output_tokens: out_tokens,
-            billable_input_tokens: self.input_tokens,
-            cache_read_tokens: 0,
+            billable_input_tokens: billable,
+            cache_read_tokens: self.cache_read_tokens,
             cache_write_tokens: 0,
             cost: 0.0,
             status: CallStatus::Ok,
@@ -388,6 +401,20 @@ mod tests {
             },
             _ => panic!("expected message item"),
         }
+    }
+
+    #[test]
+    fn parse_extracts_cached_tokens_and_billable() {
+        let json = serde_json::json!({
+            "choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":30}}
+        });
+        let resp = parse_chat_response(&json, "gpt-4o");
+        let c = &resp.calls[0];
+        assert_eq!(c.input_tokens, 100);         // echoed verbatim
+        assert_eq!(c.cache_read_tokens, 30);
+        assert_eq!(c.billable_input_tokens, 70); // 100 - 30
+        assert_eq!(c.cache_write_tokens, 0);
     }
 
     #[test]
