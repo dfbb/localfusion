@@ -14,6 +14,13 @@ use localfusion::bootstrap::ensure_initialized;
 use localfusion::db::Db;
 use localfusion::ingress::handler::{handle, InferenceState, Proto};
 
+fn now_secs_main() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[derive(Parser)]
 struct Cli {
     #[arg(long, default_value = "./localfusion.db")]
@@ -115,7 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Probe background task (exits when shutdown signal received)
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    localfusion::probe::spawn_probe_loop(db.clone(), enc_key, 1800, shutdown_rx);
+    localfusion::probe::spawn_probe_loop(db.clone(), enc_key, 1800, shutdown_rx.clone());
+
+    // Seed price defaults from the embedded snapshot if the table is empty, then refresh daily.
+    if let Err(e) = localfusion::prices_litellm::seed_defaults_if_empty(&db, now_secs_main()).await {
+        tracing::warn!("price_defaults seed failed: {e}");
+    }
+    localfusion::price_refresh::spawn_price_refresh_loop(db.clone(), shutdown_rx);
 
     // Inference server
     let inf_state = InferenceState {

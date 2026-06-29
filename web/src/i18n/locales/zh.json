@@ -60,7 +60,13 @@
     "referencedCannotDelete": "被引用，无法删除：{{names}}",
     "unknownRef": "未知引用",
     "testAll": "测试全部",
-    "testing": "测试中…"
+    "testing": "测试中…",
+    "priceColumn": "价格",
+    "priceIn": "输入价格",
+    "priceOut": "输出价格",
+    "cacheRead": "缓存读取价格",
+    "cacheWrite": "缓存写入价格",
+    "priceHint": "单位:美元 / 百万 token。添加时留空将按模型名自动匹配默认价格。"
   },
   "virtualModels": {
     "pageTitle": "虚拟模型列表",

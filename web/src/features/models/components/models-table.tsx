@@ -26,7 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { type ModelRow } from '../data/schema'
+import { type ModelRow, type Prices } from '../data/schema'
 import { modelsColumns } from './models-columns'
 
 const CONNECTORS = ['chat', 'anthropic', 'responses']
@@ -41,6 +41,12 @@ export function ModelsTable() {
     queryFn: () => api.get('/models').then((r) => r.data),
   })
 
+  const { data: prices = [] } = useQuery<Prices[]>({
+    queryKey: ['prices'],
+    queryFn: () => api.get('/stats/prices').then((r) => r.data),
+  })
+  const priceMap = new Map(prices.map((p) => [p.model_id, p]))
+
   const table = useReactTable({
     data,
     columns: modelsColumns,
@@ -53,6 +59,7 @@ export function ModelsTable() {
     getPaginationRowModel: getPaginationRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
+    meta: { priceMap },
   })
 
   const idFilter = (table.getColumn('id')?.getFilterValue() as string) ?? ''

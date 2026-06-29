@@ -70,6 +70,13 @@ pub struct ModelUsage {
     pub role: CallRole,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Non-cached input tokens, used for cost only. MUST be set explicitly at every
+    /// construction site (no meaningful default: 0 would zero out input cost).
+    pub billable_input_tokens: u64,
+    /// Tokens served from cache (cheaper input). Defaults to 0 where there's no cache info.
+    pub cache_read_tokens: u64,
+    /// Tokens written to cache (Anthropic cache creation). Defaults to 0.
+    pub cache_write_tokens: u64,
     pub cost: f64,
     pub status: CallStatus,
     pub estimated: bool,
@@ -216,6 +223,9 @@ mod tests {
             role: CallRole::Member,
             input_tokens: 1,
             output_tokens: 2,
+            billable_input_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
             cost: 0.0,
             status: st,
             estimated: false,

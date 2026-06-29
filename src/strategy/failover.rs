@@ -20,7 +20,9 @@ impl Strategy for Failover {
                     }
                     Err(e) => {
                         ctx.recorder.record(ModelUsage { model_id: member.model_id.clone(), role: CallRole::Member,
-                            input_tokens: 0, output_tokens: 0, cost: 0.0, status: CallStatus::Failed,
+                            input_tokens: 0, output_tokens: 0, billable_input_tokens: 0,
+                            cache_read_tokens: 0, cache_write_tokens: 0,
+                            cost: 0.0, status: CallStatus::Failed,
                             estimated: true, latency_secs: 0.0 });
                         if let Some(t) = ctx.trace { t.add_attempt(&member.model_id, false, Some(&e.to_string())); }
                         last_err = Some(FusionError::from(e));

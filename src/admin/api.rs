@@ -16,6 +16,7 @@ pub fn models_routes() -> Router<AdminState> {
     Router::new()
         .route("/admin/api/models", get(list_models).post(create_model))
         .route("/admin/api/models/:id", put(update_model).delete(delete_model))
+        .route("/admin/api/models/:id/prices", put(update_prices))
 }
 
 async fn list_models(State(s): State<AdminState>, h: HeaderMap) -> Response {
@@ -112,7 +113,45 @@ async fn upsert_from_body(
             .map(String::from),
         extra: body.get("extra").map(|v| v.to_string()),
     };
-    s.db.model_upsert(&row).await
+    // Validate price fields BEFORE writing the model, so an invalid price never mutates the model.
+    let pin = price_field(body, "price_in")?;
+    let pout = price_field(body, "price_out")?;
+    let pcr = price_field(body, "cache_read")?;
+    let pcw = price_field(body, "cache_write")?;
+    let any_price = pin.or(pout).or(pcr).or(pcw).is_some();
+
+    let model_name = row.model.clone();
+    let model_id = row.id.clone();
+    s.db.model_upsert(&row).await?;
+
+    if any_price {
+        // Explicit prices win (including on a repeat POST): absent fields default to 0.
+        s.db.price_upsert(&crate::db::prices::PriceRow {
+            model_id: model_id.clone(),
+            price_in: pin.unwrap_or(0.0),
+            price_out: pout.unwrap_or(0.0),
+            cache_read: pcr.unwrap_or(0.0),
+            cache_write: pcw.unwrap_or(0.0),
+            updated_at: now_secs(),
+        })
+        .await?;
+    } else if s.db.price_get(&model_id).await?.is_none() {
+        // No explicit prices and no existing row: fill from the litellm snapshot if matched.
+        if let Some(v) = s.db.defaults_match(&model_name).await? {
+            s.db.price_upsert(&crate::db::prices::PriceRow {
+                model_id: model_id.clone(),
+                price_in: v.price_in,
+                price_out: v.price_out,
+                cache_read: v.cache_read,
+                cache_write: v.cache_write,
+                updated_at: now_secs(),
+            })
+            .await?;
+        }
+    }
+    // else: no explicit prices but a price row already exists -> leave it untouched
+    // (a repeat POST must never clobber hand-set prices with a default).
+    Ok(())
 }
 
 /// Validate a model `base_url` before persisting it.
@@ -180,10 +219,58 @@ async fn delete_model(
             Json(serde_json::json!({"error": "model in use", "references": refs})),
         )
             .into_response(),
-        Ok(_) => match s.db.model_delete(&id).await {
+        Ok(_) => match s.db.model_delete_cascade(&id).await {
             Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
             Err(e) => err_response(e),
         },
+        Err(e) => err_response(e),
+    }
+}
+
+/// PUT /admin/api/models/:id/prices
+/// body: { price_in, price_out, cache_read, cache_write } — all four required, finite, >= 0.
+/// 404 if the model does not exist (prevents orphan price rows).
+async fn update_prices(
+    State(s): State<AdminState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(r) = require_admin(&s, &h).await {
+        return r;
+    }
+    // Model must exist (prices has no FK; enforce here to avoid orphan rows).
+    match s.db.model_get(&id).await {
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "model not found"}))).into_response()
+        }
+        Err(e) => return err_response(e),
+        Ok(Some(_)) => {}
+    }
+    // All four fields required (full replace). Reuse price_field but reject absent.
+    let require = |key: &str| -> Result<f64, crate::error::FusionError> {
+        match price_field(&body, key)? {
+            Some(v) => Ok(v),
+            None => Err(crate::error::FusionError::InvalidRequest(format!("{key} is required"))),
+        }
+    };
+    let row = match (require("price_in"), require("price_out"), require("cache_read"), require("cache_write")) {
+        (Ok(pi), Ok(po), Ok(cr), Ok(cw)) => crate::db::prices::PriceRow {
+            model_id: id.clone(), price_in: pi, price_out: po, cache_read: cr, cache_write: cw,
+            updated_at: now_secs(),
+        },
+        (e1, e2, e3, e4) => {
+            // Surface the first error.
+            for r in [e1, e2, e3, e4] {
+                if let Err(e) = r {
+                    return err_response(e);
+                }
+            }
+            unreachable!()
+        }
+    };
+    match s.db.price_upsert(&row).await {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
         Err(e) => err_response(e),
     }
 }
@@ -777,6 +864,28 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Read an optional price field from a JSON body. Returns:
+///   Ok(None)      -> field absent or JSON null (not present)
+///   Ok(Some(v))   -> a finite, non-negative number
+///   Err(..)       -> present but invalid (non-number, NaN/inf, or negative) => 400
+fn price_field(body: &serde_json::Value, key: &str) -> Result<Option<f64>, crate::error::FusionError> {
+    use crate::error::FusionError;
+    match body.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => {
+            let n = v.as_f64().ok_or_else(|| {
+                FusionError::InvalidRequest(format!("{key} must be a number"))
+            })?;
+            if !n.is_finite() || n < 0.0 {
+                return Err(FusionError::InvalidRequest(format!(
+                    "{key} must be a finite non-negative number"
+                )));
+            }
+            Ok(Some(n))
+        }
+    }
+}
+
 // ingress key: generate 24 bytes of random entropy using CSPRNG (unpredictable)
 fn random_key() -> String {
     use base64::Engine;
@@ -1251,6 +1360,9 @@ mod tests {
                 role: CallRole::Member,
                 input_tokens: 0,
                 output_tokens: 0,
+                billable_input_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
                 cost: 0.0,
                 status: CallStatus::Ok,
                 estimated: true,

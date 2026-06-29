@@ -65,8 +65,8 @@ mod tests {
     #[tokio::test]
     async fn picks_cheapest_priced_member() {
         let db = Db::open_memory().await.unwrap();
-        db.price_upsert(&PriceRow { model_id: "a".into(), price_in: 10.0, price_out: 10.0, updated_at: 0 }).await.unwrap();
-        db.price_upsert(&PriceRow { model_id: "b".into(), price_in: 1.0, price_out: 1.0, updated_at: 0 }).await.unwrap();
+        db.price_upsert(&PriceRow { model_id: "a".into(), price_in: 10.0, price_out: 10.0, cache_read: 0.0, cache_write: 0.0, updated_at: 0 }).await.unwrap();
+        db.price_upsert(&PriceRow { model_id: "b".into(), price_in: 1.0, price_out: 1.0, cache_read: 0.0, cache_write: 0.0, updated_at: 0 }).await.unwrap();
         let resolver = crate::router::ModelResolver::new(db.clone(), [0u8;32]);
         let recorder = CallRecorder::default();
         let members = vec![

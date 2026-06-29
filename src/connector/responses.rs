@@ -93,12 +93,20 @@ pub(super) fn parse_responses_response(json: &Value, model_id: &str) -> UnifiedR
         .pointer("/usage/output_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_read = json
+        .pointer("/usage/input_tokens_details/cached_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let billable = input.saturating_sub(cache_read);
 
     let call = ModelUsage {
         model_id: model_id.into(),
         role: CallRole::Member,
         input_tokens: input,
         output_tokens: output,
+        billable_input_tokens: billable,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: 0,
         cost: 0.0,
         status: CallStatus::Ok,
         estimated: json.get("usage").is_none(),
@@ -129,6 +137,7 @@ pub(super) struct ResponsesSseState {
     text: String,
     input_tokens: u64,
     output_tokens: u64,
+    cache_read_tokens: u64,
     /// Whether a usage field has been received
     has_usage: bool,
 }
@@ -140,6 +149,7 @@ impl ResponsesSseState {
             text: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cache_read_tokens: 0,
             has_usage: false,
         }
     }
@@ -171,6 +181,10 @@ impl SseTranslator for ResponsesSseState {
                         .get("output_tokens")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(0);
+                    self.cache_read_tokens = u
+                        .pointer("/input_tokens_details/cached_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                     self.has_usage = true;
                 }
             }
@@ -193,6 +207,7 @@ impl SseTranslator for ResponsesSseState {
         } else {
             (self.text.chars().count() / 4) as u64
         };
+        let billable = self.input_tokens.saturating_sub(self.cache_read_tokens);
 
         let usage = Usage {
             input_tokens: self.input_tokens,
@@ -203,6 +218,9 @@ impl SseTranslator for ResponsesSseState {
             role: CallRole::Member,
             input_tokens: self.input_tokens,
             output_tokens: out_tokens,
+            billable_input_tokens: billable,
+            cache_read_tokens: self.cache_read_tokens,
+            cache_write_tokens: 0,
             cost: 0.0,
             status: CallStatus::Ok,
             estimated,
@@ -346,6 +364,24 @@ mod tests {
             },
             _ => panic!("expected message item"),
         }
+    }
+
+    #[test]
+    fn parse_extracts_cached_tokens_and_billable() {
+        let json = serde_json::json!({
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+            "usage": {
+                "input_tokens": 80,
+                "output_tokens": 3,
+                "input_tokens_details": {"cached_tokens": 25}
+            }
+        });
+        let resp = parse_responses_response(&json, "gpt-5");
+        let c = &resp.calls[0];
+        assert_eq!(c.input_tokens, 80);
+        assert_eq!(c.billable_input_tokens, 55); // 80 - 25
+        assert_eq!(c.cache_read_tokens, 25);
+        assert_eq!(c.cache_write_tokens, 0);
     }
 
     #[test]

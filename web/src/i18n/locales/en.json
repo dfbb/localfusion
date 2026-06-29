@@ -60,7 +60,13 @@
     "referencedCannotDelete": "Referenced, cannot delete: {{names}}",
     "unknownRef": "Unknown reference",
     "testAll": "Test All",
-    "testing": "Testing…"
+    "testing": "Testing…",
+    "priceColumn": "Price",
+    "priceIn": "Input Price",
+    "priceOut": "Output Price",
+    "cacheRead": "Cache Read Price",
+    "cacheWrite": "Cache Write Price",
+    "priceHint": "USD per million tokens. Leave blank when adding to auto-match a default by model name."
   },
   "virtualModels": {
     "pageTitle": "Virtual Model List",

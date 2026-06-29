@@ -33,6 +33,7 @@ impl Db {
             .await
             .map_err(|e| FusionError::Internal(format!("db connect: {e}")))?;
         sqlx::query(schema::SCHEMA_SQL).execute(&pool).await?;
+        run_migrations(&pool).await?;
         // Restrict the DB file to owner-only (0600): it holds encrypted upstream keys and
         // hashed admin/ingress tokens. At-rest encryption is bound to the host machine-id
         // (see crypto::derive_key), so a co-located reader who can open this file could
@@ -52,6 +53,7 @@ impl Db {
             .await
             .map_err(|e| FusionError::Internal(format!("db connect: {e}")))?;
         sqlx::query(schema::SCHEMA_SQL).execute(&pool).await?;
+        run_migrations(&pool).await?;
         Ok(Db { pool })
     }
 }
@@ -84,6 +86,26 @@ async fn apply_pragmas(conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// Idempotent column additions for upgrading pre-existing databases.
+/// `CREATE TABLE IF NOT EXISTS` never alters an existing table, so columns added to a
+/// table's definition over time must be applied with ALTER TABLE. SQLite has no
+/// "ADD COLUMN IF NOT EXISTS", so a duplicate-column error is the expected no-op signal.
+async fn run_migrations(pool: &SqlitePool) -> Result<(), FusionError> {
+    let alters = [
+        "ALTER TABLE prices ADD COLUMN cache_read REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE prices ADD COLUMN cache_write REAL NOT NULL DEFAULT 0",
+    ];
+    for sql in alters {
+        if let Err(e) = sqlx::query(sql).execute(pool).await {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(FusionError::from(e));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +125,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fk, 1);
+    }
+
+    #[tokio::test]
+    async fn prices_has_cache_columns_and_price_defaults_table() {
+        let db = Db::open_memory().await.unwrap();
+        // price_defaults exists and is empty
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM price_defaults")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(n, 0);
+        // prices has the two new columns (insert a row using them succeeds)
+        sqlx::query("INSERT INTO prices(model_id,price_in,price_out,cache_read,cache_write,updated_at) VALUES('m',1.0,2.0,0.3,0.5,100)")
+            .execute(&db.pool).await.unwrap();
+        let cr: f64 = sqlx::query_scalar("SELECT cache_read FROM prices WHERE model_id='m'")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(cr, 0.3);
+        // run_migrations is idempotent: a second pass on the same pool is a no-op (no error)
+        super::run_migrations(&db.pool).await.unwrap();
     }
 }
