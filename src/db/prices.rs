@@ -57,6 +57,33 @@ impl Db {
         .await?;
         Ok(())
     }
+
+    /// Replace the entire price_defaults snapshot in one transaction.
+    /// `updated_at` is supplied by the caller (Unix seconds) so the function stays pure.
+    pub async fn defaults_replace_all(
+        &self,
+        rows: &[(String, PriceValues)],
+        updated_at: i64,
+    ) -> Result<(), FusionError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM price_defaults").execute(&mut *tx).await?;
+        for (key, v) in rows {
+            sqlx::query(
+                "INSERT INTO price_defaults(model_key, price_in, price_out, cache_read, cache_write, updated_at)
+                 VALUES(?,?,?,?,?,?)",
+            )
+            .bind(key)
+            .bind(v.price_in)
+            .bind(v.price_out)
+            .bind(v.cache_read)
+            .bind(v.cache_write)
+            .bind(updated_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -94,5 +121,23 @@ mod tests {
         let got = db.price_get("m").await.unwrap().unwrap();
         assert_eq!(got.cache_read, 0.3);
         assert_eq!(got.cache_write, 0.5);
+    }
+
+    #[tokio::test]
+    async fn defaults_replace_all_rewrites_snapshot() {
+        let db = Db::open_memory().await.unwrap();
+        let rows = vec![
+            ("a".to_string(), PriceValues { price_in: 1.0, price_out: 2.0, cache_read: 0.0, cache_write: 0.0 }),
+            ("b".to_string(), PriceValues { price_in: 3.0, price_out: 4.0, cache_read: 0.1, cache_write: 0.2 }),
+        ];
+        db.defaults_replace_all(&rows, 100).await.unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM price_defaults")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(n, 2);
+        // a second replace with fewer rows fully rewrites (old rows gone)
+        db.defaults_replace_all(&rows[..1], 200).await.unwrap();
+        let n2: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM price_defaults")
+            .fetch_one(&db.pool).await.unwrap();
+        assert_eq!(n2, 1);
     }
 }
