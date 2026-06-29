@@ -347,11 +347,16 @@ for the per-model "real" row uses the same folded value.
   decided by "any of the four is present", i.e. any is `Some(finite)`.
 - **Edit prices** (NEW `PUT /admin/api/models/:id/prices`): body
   `{ price_in, price_out, cache_read, cache_write }` — **all four required**,
-  each a non-negative finite number (USD per million tokens). This is a full
-  replace, not a partial update: the four values are upserted into `prices`
-  (with `updated_at = now_secs()`). Clearing a price means entering `0`
-  explicitly; the frontend edit form makes all four required and does not omit
-  them (see frontend). Missing/`null`/non-finite/negative fields are a 400.
+  each a non-negative finite number (USD per million tokens). The handler first
+  calls `model_get(id)`; if the model does not exist it returns **404** and
+  writes nothing — this prevents creating an orphan price row for a
+  non-existent model (`prices` has no FK, so the check is enforced in the
+  handler, consistent with the delete-cascade goal of never leaving orphans).
+  When the model exists, this is a full replace, not a partial update: the four
+  values are upserted into `prices` (with `updated_at = now_secs()`). Clearing a
+  price means entering `0` explicitly; the frontend edit form makes all four
+  required and does not omit them (see frontend). Missing/`null`/non-finite/
+  negative fields are a 400.
 - **Read prices:** the frontend reuses the existing
   `GET /admin/api/stats/prices` (returns all price rows) and merges by
   `model_id` on the models page — smaller backend change than augmenting the
@@ -405,12 +410,25 @@ for the per-model "real" row uses the same folded value.
      "present" and write a 0 price, suppressing the default — the bug this rule
      prevents.) A field the user typed `0` into is intentional and IS sent.
    - **Edit:** the four fields are back-filled from the existing `prices` row
-     (a model with no price row back-fills 0s). On save the dialog calls
-     `PUT /admin/api/models/:id/prices`, which requires **all four** fields. The
-     edit form therefore makes all four **required** (no omission): the user
-     must leave a value in each; clearing a price means typing `0`. This differs
-     from the add form's optional/omittable behavior — the shared dialog applies
-     the required rule in edit mode and the omit-empty rule in add mode.
+     (a model with no price row back-fills 0s). Because this is the **shared**
+     model dialog, edit-save must persist BOTH the model config and the prices —
+     two sequential calls:
+     1. `PUT /admin/api/models/:id` with the model fields (the existing call,
+        unchanged — connector / base_url / model / api key / extra etc.).
+     2. on its success, `PUT /admin/api/models/:id/prices` with the four prices
+        (all four **required**; clearing a price means typing `0`).
+
+     **Failure handling:** if the model PUT fails, do not call the price PUT;
+     show the error and keep the dialog open. If the model PUT succeeds but the
+     price PUT fails, surface a clear partial-save error ("model saved, prices
+     failed — retry") and keep the dialog open so the user can retry the price
+     save; the model query is invalidated so the saved model fields are
+     reflected. On full success, invalidate both the models list and the
+     prices query, then close the dialog. (Sequencing model-first means a price
+     failure never leaves the model unsaved.)
+
+     The price-required rule applies in edit mode only — the add form keeps its
+     optional/omittable behavior.
    - The form schema (`web/src/features/models/data/schema.ts`) models the two
      modes: in **add** mode the four price fields are optional and blank inputs
      normalize to `undefined` (so they are dropped from the POST payload rather
@@ -468,7 +486,8 @@ tests + wiremock, consistent with the codebase.
   the existing model-create tests.)
 - **PUT prices**: `PUT /admin/api/models/:id/prices` with all four valid numbers
   upserts and stamps `updated_at`; a body missing any field, or with a
-  negative/non-finite value, returns 400.
+  negative/non-finite value, returns 400; a PUT for a **non-existent model id
+  returns 404 and writes no row** (no orphan).
 - **Delete cascade**: deleting a model removes its `prices` row, and
   `GET /admin/api/stats/prices` no longer returns it.
 - **Connector cache extraction**: for each of the three connectors, feed a
@@ -505,5 +524,5 @@ tests + wiremock, consistent with the codebase.
 | `web/src/features/models/components/models-action-dialog.tsx` | Four price inputs |
 | `web/src/features/models/components/models-columns.tsx` | Price column |
 | `web/src/features/models/data/schema.ts` | Four optional price fields |
-| `web/src/features/models/components/models-provider.tsx` | Price edit mutation + merge prices by model_id |
+| `web/src/features/models/components/models-provider.tsx` | Edit-save = sequential model PUT then prices PUT (partial-failure handling); merge prices by model_id |
 | `web/src/i18n/locales/{zh,en}.json` | New `models.*` price keys |
