@@ -178,11 +178,13 @@ export function ModelsActionDialog({ open, onOpenChange, currentRow }: Props) {
       }
     },
     onSuccess: (_data, v) => {
-      qc.invalidateQueries({ queryKey: ['models'] })
-      qc.invalidateQueries({ queryKey: ['prices'] })
       toast.success(t('common.saved'))
       onOpenChange(false)
       if (isEdit) runTestOne(v.id)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['models'] })
+      qc.invalidateQueries({ queryKey: ['prices'] })
     },
     onError: () => toast.error(t('common.saveFailed')),
   })

@@ -7,7 +7,7 @@ use crate::error::FusionError;
 /// litellm raw JSON (the blob page URL given in the spec is a GitHub HTML page;
 /// the raw form below returns the JSON document itself).
 pub const LITELLM_URL: &str =
-    "https://raw.githubusercontent.com/BerriAI/litellm/litellm_internal_staging/model_prices_and_context_window.json";
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 const DAY_SECS: u64 = 24 * 60 * 60;
 
