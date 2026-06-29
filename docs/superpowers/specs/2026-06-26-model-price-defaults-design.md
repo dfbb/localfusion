@@ -318,9 +318,15 @@ for the per-model "real" row uses the same folded value.
   re-submitting an existing one. The price-resolution rules below must NOT
   clobber a model's existing hand-set prices on a repeat POST. The request body
   gains four **optional** price fields (`price_in`, `price_out`, `cache_read`,
-  `cache_write`, USD per million tokens, non-negative). After
-  `upsert_from_body` succeeds, the price row for that `model_id` is resolved
-  with this precedence:
+  `cache_write`, USD per million tokens, non-negative).
+
+  **Order of operations (no partial writes):** the four price fields are
+  **validated before any model write**. The handler first checks each present
+  price is a finite, non-negative number; if any is invalid it returns **400
+  and performs no model upsert and no price write** — an invalid-price request
+  must never mutate the model. Only after price validation passes does the
+  handler run `upsert_from_body`, and then resolve the price row with this
+  precedence:
   1. If **any** of the four price fields is present in the request (see
      "Present" below), upsert a `PriceRow` keyed by the local `model_id` from
      the provided values (absent ones default to 0). Explicit prices always
@@ -333,6 +339,10 @@ for the per-model "real" row uses the same folded value.
      exists, leave it untouched — a repeat POST must never overwrite
      hand-set prices with a default. On no hit, create no price row.
 
+  (Model-config validation that already runs inside `upsert_from_body`, e.g.
+  `validate_base_url`, is unchanged; the new step only moves the *price* checks
+  ahead of the model write so a bad price can't leave a mutated model.)
+
   **`updated_at`:** every price write (explicit add, default fill, and the PUT
   edit below) sets `updated_at` to the current Unix seconds (`now_secs()`), so
   the dashboard's staleness display and the existing schema semantics stay
@@ -341,8 +351,9 @@ for the per-model "real" row uses the same folded value.
   **"Present" definition (avoids empty-input → 0-price bug):** a price field is
   "present" only if it deserializes to a **finite number**. The four fields are
   typed as `Option<f64>` in the request body; `None` (absent / JSON `null`)
-  counts as not-present. The backend additionally rejects non-finite values
-  (NaN / infinity) and negatives as a 400. So an empty form input must arrive as
+  counts as not-present. Per the order-of-operations above, present values are
+  validated (finite, non-negative) before the model write; NaN / infinity /
+  negative -> 400 with no mutation. So an empty form input must arrive as
   absent/`null`, not `0` or `""` — see the frontend rule below. Precedence is
   decided by "any of the four is present", i.e. any is `Some(finite)`.
 - **Edit prices** (NEW `PUT /admin/api/models/:id/prices`): body
@@ -482,8 +493,10 @@ tests + wiremock, consistent with the codebase.
   exists**; a **repeat POST with no price fields against a model that already
   has a (hand-set) price row leaves that row unchanged** (the regression this
   guards); a POST with `price_in: 0` (explicit zero) is treated as present and
-  writes 0 (not a fuzzy match). (Integration test via the admin API, alongside
-  the existing model-create tests.)
+  writes 0 (not a fuzzy match); a POST with an **invalid price (negative /
+  non-finite) returns 400 and makes no model change** — assert the model is
+  absent (new id) or unchanged (existing id) after the rejected request. (Integration
+  test via the admin API, alongside the existing model-create tests.)
 - **PUT prices**: `PUT /admin/api/models/:id/prices` with all four valid numbers
   upserts and stamps `updated_at`; a body missing any field, or with a
   negative/non-finite value, returns 400; a PUT for a **non-existent model id
@@ -518,7 +531,7 @@ tests + wiremock, consistent with the codebase.
 | `src/connector/anthropic.rs` | Extract cache_read/cache_creation tokens, set billable input (non-stream + SSE) |
 | `src/connector/responses.rs` | Extract `cached_tokens`, compute billable input (non-stream + SSE) |
 | `src/pipeline.rs` | `cost_for` bills billable_input + cache-read + cache-write + output; `write_stats` folds cache tokens into the input dimension |
-| `src/admin/api.rs` | Add-model: optional finite-number price fields (override) else default-fill only when no price row exists; `PUT /admin/api/models/:id/prices` (4 required); delete-model uses `model_delete_cascade` |
+| `src/admin/api.rs` | Add-model: validate prices before model upsert (bad price -> 400, no mutation); optional finite-number price fields (override) else default-fill only when no price row exists; `PUT /admin/api/models/:id/prices` (4 required, 404 if model absent); delete-model uses `model_delete_cascade` |
 | `src/price_refresh.rs` (or similar) | New — refresh function + `spawn_price_refresh_loop` |
 | `src/main.rs` | Spawn the daily price-refresh loop; startup snapshot init |
 | `web/src/features/models/components/models-action-dialog.tsx` | Four price inputs |
